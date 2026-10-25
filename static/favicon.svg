@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+	<title>Word Quest</title>
+	<rect width="512" height="512" fill="#f8efdd" />
+	<g fill="none" stroke="#cddce0" stroke-width="5" opacity="0.8">
+		<path d="M0 96H512" />
+		<path d="M0 176H512" />
+		<path d="M0 256H512" />
+		<path d="M0 336H512" />
+		<path d="M0 416H512" />
+	</g>
+	<path d="M92 0V512" fill="none" stroke="#d68c83" stroke-width="7" opacity="0.9" />
+	<path
+		d="M130 176C136 278 152 344 192 344S230 232 256 232 280 344 320 344 376 278 382 176"
+		fill="none"
+		stroke="#5a3c29"
+		stroke-linecap="round"
+		stroke-linejoin="round"
+		stroke-width="35"
+	/>
+	<circle cx="420" cy="337" r="17" fill="#ca655c" />
+</svg>

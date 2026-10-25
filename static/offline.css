@@ -1,0 +1,20 @@
+body {
+	min-height: 100svh;
+	display: grid;
+	place-items: center;
+	padding: var(--spacing-6);
+}
+main.post-it {
+	width: min(100%, 24rem);
+	padding: var(--spacing-6);
+	background: var(--yellow);
+}
+h1 {
+	margin: 0 0 var(--spacing-3);
+	font-size: var(--text-2xl);
+}
+p {
+	margin: 0 0 var(--spacing-6);
+	color: var(--ink-soft);
+	line-height: 1.6;
+}

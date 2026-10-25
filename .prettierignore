@@ -1,0 +1,16 @@
+# Package Managers
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+bun.lock
+bun.lockb
+
+# Miscellaneous
+/static/
+/dict/
+/.svelte-kit/
+/logs/
+
+# Legacy script output locations
+/score-reports/
+/example-generation-*.txt

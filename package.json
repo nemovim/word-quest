@@ -1,0 +1,63 @@
+{
+	"name": "word-quest",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"engines": {
+		"node": "24.x"
+	},
+	"scripts": {
+		"dev": "vite dev",
+		"build": "svelte-kit sync && vite build",
+		"preview": "vite preview",
+		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"fix": "prettier --write . && eslint src tests scripts vite.config.ts eslint.config.js --fix",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"vocas:score": "node --env-file=.env scripts/score-vocas.ts",
+		"examples:generate": "node --env-file=.env scripts/generate-examples.ts",
+		"pwa:generate": "pwa-assets-generator",
+		"lockfile:check": "npm ci --dry-run --ignore-scripts --no-audit --no-fund",
+		"prepare": "husky"
+	},
+	"lint-staged": {
+		"*.{js,ts,svelte}": [
+			"prettier --write",
+			"eslint --fix"
+		],
+		"*.{json,md,css,scss}": [
+			"prettier --write"
+		]
+	},
+	"devDependencies": {
+		"@auth/sveltekit": "^1.11.2",
+		"@eslint/js": "^10.0.1",
+		"@sveltejs/adapter-vercel": "^6.3.4",
+		"@sveltejs/kit": "^2.69.3",
+		"@sveltejs/vite-plugin-svelte": "^7.2.0",
+		"@types/node": "^26",
+		"@vite-pwa/assets-generator": "^1.0.2",
+		"eslint": "^10.7.0",
+		"eslint-config-prettier": "^10.1.8",
+		"eslint-plugin-import-x": "^4.17.1",
+		"eslint-plugin-svelte": "^3.20.0",
+		"globals": "^17.7.0",
+		"husky": "^9.1.7",
+		"lint-staged": "^17.0.8",
+		"prettier": "^3.9.5",
+		"prettier-plugin-svelte": "^4.1.1",
+		"sass": "^1.101.0",
+		"svelte": "^5.56.4",
+		"svelte-check": "^4.7.2",
+		"typescript": "^6.0.3",
+		"typescript-eslint": "^8.64.0",
+		"vite": "^8.1.4",
+		"vitest": "^4.1.10"
+	},
+	"dependencies": {
+		"@lucide/svelte": "^1.24.0",
+		"@openrouter/sdk": "^0.13.49",
+		"mongoose": "^9.7.4",
+		"npm": "^11.17.0"
+	}
+}

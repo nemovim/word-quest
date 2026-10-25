@@ -1,0 +1,197 @@
+@font-face {
+	font-family: 'NanumBarunpen';
+	src: url('/fonts/NanumBarunpen.woff') format('woff');
+	font-display: swap;
+}
+
+:root {
+	--spacing-1: 0.25rem;
+	--spacing-2: 0.5rem;
+	--spacing-3: 0.75rem;
+	--spacing-4: 1rem;
+	--spacing-5: 1.25rem;
+	--spacing-6: 1.5rem;
+	--spacing-8: 2rem;
+	--spacing-10: 2.5rem;
+	--spacing-12: 3rem;
+	--spacing-16: 4rem;
+	--spacing-20: 5rem;
+
+	--text-sm: 0.875rem;
+	--text-base: 1rem;
+	--text-lg: 1.125rem;
+	--text-xl: 1.25rem;
+	--text-2xl: 1.5rem;
+	--text-3xl: 1.875rem;
+	--text-4xl: 2.25rem;
+
+	--theme: oklch(0.43 0.065 55);
+	--yellow: oklch(0.95 0.06 93);
+	--blue: oklch(0.93 0.04 230);
+	--green: oklch(0.93 0.05 145);
+	--rose: oklch(0.93 0.05 25);
+
+	--paper: oklch(from var(--theme) calc(l + 0.54) calc(c * 0.34) calc(h + 29));
+	--paper-soft: oklch(from var(--theme) calc(l + 0.51) calc(c * 0.54) calc(h + 24));
+	--paper-deep: oklch(from var(--theme) calc(l + 0.47) calc(c * 0.69) calc(h + 17));
+	--ink: oklch(from var(--theme) calc(l - 0.13) calc(c * 0.38) calc(h + 3));
+	--ink-soft: oklch(from var(--theme) calc(l + 0.04) calc(c * 0.38) calc(h + 3));
+	--line: oklch(from var(--theme) calc(l + 0.4) calc(c * 0.65) calc(h + 17));
+	--line-blue: oklch(from var(--blue) calc(l - 0.09) calc(c - 0.01) h);
+	--line-red: oklch(from var(--rose) calc(l - 0.23) calc(c + 0.055) calc(h + 3));
+	--shadow: oklch(from var(--theme) calc(l - 0.16) calc(c * 0.46) calc(h + 3) / 18%);
+	--shadow-soft: oklch(from var(--shadow) l c h / 9%);
+
+	--red-soft: oklch(from var(--rose) calc(l + 0.01) calc(c - 0.015) calc(h + 3));
+	--red: oklch(from var(--rose) calc(l - 0.46) calc(c + 0.07) calc(h + 3));
+	--green-strong: oklch(from var(--green) calc(l - 0.45) calc(c + 0.04) h);
+
+	--brown: var(--theme);
+	--brown-hover: oklch(from var(--brown) calc(l - 0.07) calc(c - 0.005) h);
+	--brown-soft: oklch(from var(--brown) calc(l + 0.41) calc(c * 0.69) calc(h + 7));
+	--brown-soft-hover: oklch(from var(--brown-soft) calc(l - 0.06) calc(c + 0.01) h);
+	--white: oklch(1 0 0);
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html {
+	min-height: 100%;
+	font-family: 'NanumBarunpen', sans-serif;
+	font-size: clamp(0.8rem, 0.8rem + 0.4vw, 1.2rem);
+	color: var(--ink);
+	word-break: keep-all;
+	background-color: var(--paper-soft);
+	background-image:
+		linear-gradient(90deg, transparent 3.9rem, var(--line-red) 4rem, transparent 4.1rem),
+		repeating-linear-gradient(transparent 0 2.35rem, var(--line-blue) 2.4rem);
+}
+
+body {
+	min-height: 100vh;
+	margin: 0;
+}
+
+h1 {
+	font-size: var(--text-4xl);
+}
+
+h2 {
+	font-size: var(--text-2xl);
+}
+
+small {
+	font-size: var(--text-sm);
+}
+
+button,
+input,
+select,
+textarea {
+	font: inherit;
+}
+
+input,
+textarea,
+select {
+	background-color: var(--paper);
+}
+
+button,
+a {
+	-webkit-tap-highlight-color: transparent;
+}
+
+button:not(:disabled),
+a:not([aria-disabled='true']) {
+	cursor: pointer;
+}
+
+button:focus-visible,
+a:focus-visible {
+	outline: 0.18rem solid var(--brown);
+	outline-offset: 0.18rem;
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+	outline: 0.14rem solid var(--brown);
+	outline-offset: -0.1rem;
+}
+
+.button {
+	width: fit-content;
+	border: 0;
+	border-radius: 0.35rem;
+	padding: var(--spacing-2) var(--spacing-4);
+	font-weight: 700;
+	color: var(--paper);
+	background: var(--brown);
+	box-shadow: 0 0.15rem 0.35rem var(--shadow-soft);
+	transition:
+		background-color 0.15s ease,
+		box-shadow 0.15s ease,
+		transform 0.15s ease;
+}
+
+.button:hover {
+	background: var(--brown-hover);
+}
+
+.button:not(:disabled):not([aria-disabled='true']):hover {
+	box-shadow: 0 0.22rem 0.55rem var(--shadow-soft);
+	transform: translateY(-0.05rem);
+}
+
+.button:not(:disabled):not([aria-disabled='true']):active {
+	box-shadow: 0 0.08rem 0.2rem var(--shadow-soft);
+	transform: translateY(0);
+}
+
+.button:is(:disabled, [aria-disabled='true']) {
+	cursor: wait;
+	opacity: 0.55;
+	box-shadow: none;
+	transform: none;
+}
+
+.button.secondary {
+	color: var(--brown);
+	background: var(--brown-soft);
+}
+
+.button.secondary:hover {
+	background: var(--brown-soft-hover);
+}
+
+.field {
+	display: grid;
+	gap: var(--spacing-2);
+	font-weight: 700;
+}
+
+.field :is(input, select, textarea) {
+	width: 100%;
+	border: 0.1rem solid var(--line);
+	border-radius: 0.3rem;
+	padding: var(--spacing-3) var(--spacing-4);
+	color: var(--ink);
+}
+
+.message-error {
+	color: var(--red);
+}
+
+.post-it {
+	width: fit-content;
+	border: none;
+	box-shadow: 0 0.2rem 0.3rem var(--shadow);
+	transform: rotate(-1deg);
+}
+
+.post-it:nth-child(even) {
+	transform: rotate(0.8deg);
+}
