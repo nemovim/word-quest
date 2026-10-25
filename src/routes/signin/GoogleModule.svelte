@@ -32,8 +32,8 @@
 				<path fill="none" d="M0 0h48v48H0z"></path>
 			</svg>
 		</div>
-		<span class="gsi-material-button-contents">Sign in with Google</span>
-		<span style="display: none;">Sign in with Google</span>
+		<span class="gsi-material-button-contents">Google로 모험 시작하기</span>
+		<span style="display: none;">Google로 모험 시작하기</span>
 	</div>
 </button>
 

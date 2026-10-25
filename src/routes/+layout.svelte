@@ -47,7 +47,7 @@
 
 {#if !isSignIn}
 	<header class:compact={page.url.pathname === '/quiz' || page.url.pathname === '/'}>
-		<a href={resolve('/')} aria-label="워드 노트 홈" data-sveltekit-preload-data="off">
+		<a href={resolve('/')} aria-label="워드 퀘스트 홈" data-sveltekit-preload-data="off">
 			<strong>wordquest<span aria-hidden="true">.</span></strong>
 		</a>
 		<nav aria-label="주요 메뉴">
