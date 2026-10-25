@@ -1,10 +1,12 @@
 import { error } from '@sveltejs/kit';
 
+import { env } from '$env/dynamic/private';
+
 import type { User } from '$lib/shared/types/user.type';
 
 function getAdminEmails(): Set<string> {
 	return new Set(
-		(process.env.ADMIN_EMAILS ?? '')
+		(env.ADMIN_EMAILS ?? '')
 			.split(/[\s,]+/)
 			.map((email) => email.trim().toLowerCase())
 			.filter(Boolean)

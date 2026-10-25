@@ -1,5 +1,7 @@
 import mongoose from 'mongoose';
 
+import { env } from '$env/dynamic/private';
+
 import AnswerMemoModel from '$lib/models/answer-memo.model';
 import QuizCardModel from '$lib/models/quiz-card.model';
 import QuizReportModel from '$lib/models/quiz-report.model';
@@ -12,7 +14,7 @@ type CachedMongoose = typeof globalThis & {
 };
 
 async function connectDb(): Promise<typeof mongoose> {
-	const mongoUri = process.env.MONGO_URI;
+	const mongoUri = env.MONGO_URI;
 
 	if (mongoUri == null || mongoUri.trim() === '') {
 		throw new Error('MONGO_URI is required.');

@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { signOut } from '@auth/sveltekit/client';
 	import Download from '@lucide/svelte/icons/download';
+	import Heart from '@lucide/svelte/icons/heart';
 	import { onMount, untrack } from 'svelte';
 
 	import { version } from '../../package.json';
 
 	import { invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import ChestStash from '$lib/components/ChestStash.svelte';
 	import Forge from '$lib/components/Forge.svelte';
 	import { pwaInstallPrompt, requestPwaInstall } from '$lib/shared/utils/pwa-install.util';
 
@@ -62,13 +62,6 @@
 				<h1>{(Math.floor(data.user.currentLevel * 100) / 100).toFixed(2)}</h1>
 			</div>
 			<div class="overview-corner">
-				{#if data.game.battle.chests.length}
-					<ChestStash
-						count={data.game.battle.chests.length}
-						bossCount={data.game.battle.chests.filter((c) => c.boss).length}
-						href="/quiz"
-					/>
-				{/if}
 				<span>최근 7일 {weeklyDelta}</span>
 			</div>
 		</header>
@@ -76,6 +69,37 @@
 			{#each notes as note (note.label)}<div>
 					<strong>{note.value}</strong><small>{note.label}</small>
 				</div>{/each}
+		</div>
+		<div class="adventure-status" aria-label="탐험 현황">
+			<span
+				class="health"
+				aria-label={`체력 ${data.game.player?.hp ?? 100} / ${data.game.player?.maxHp ?? 100}`}
+				title="현재 체력 / 최대 체력"
+			>
+				<Heart size={19} fill="currentColor" strokeWidth={1.5} aria-hidden="true" />
+				<strong
+					>{data.game.player?.hp ?? 100}<small> / {data.game.player?.maxHp ?? 100}</small></strong
+				>
+			</span>
+			<a
+				href={resolve('/quiz')}
+				aria-label={`보물상자 ${data.game.battle.chests.length}개 보러가기`}
+				title="보물상자"
+			>
+				<svg class="chest-icon" viewBox="0 0 28 26" fill="none" aria-hidden="true">
+					<path d="M3 12V9a6 6 0 0 1 6-6h10a6 6 0 0 1 6 6v3" fill="#d7ab73" />
+					<path d="M3 12h22v10H3Z" fill="#bb8655" />
+					<path
+						d="M3 12V9a6 6 0 0 1 6-6h10a6 6 0 0 1 6 6v13H3V12Zm0 0h22"
+						stroke="#795535"
+						stroke-width="1.7"
+						stroke-linejoin="round"
+					/>
+					<path d="M8 4v17M20 4v17" stroke="#efd49e" stroke-width="2" />
+					<rect x="12" y="10" width="4" height="6" rx="1" fill="#f1d69c" stroke="#8a623b" />
+				</svg>
+				<strong>{data.game.battle.chests.length}</strong>
+			</a>
 		</div>
 		{#if recoverySeconds > 0}
 			<button class="button explore" disabled
@@ -127,6 +151,45 @@
 <small class="app-version">word-quest v{version}</small>
 
 <style>
+	.adventure-status {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: space-between;
+		gap: 0.5rem 1rem;
+		margin-bottom: 0.75rem;
+		font-size: 0.85rem;
+		color: var(--ink-soft);
+	}
+	.adventure-status > span,
+	.adventure-status > a {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.45rem;
+		min-height: 2rem;
+	}
+	.adventure-status .health {
+		color: #c46569;
+	}
+	.adventure-status strong small {
+		color: var(--ink-soft);
+		font-size: 0.75rem;
+		font-weight: 400;
+	}
+	.chest-icon {
+		width: 1.65rem;
+		height: 1.5rem;
+	}
+	.adventure-status strong {
+		color: var(--ink);
+		font-variant-numeric: tabular-nums;
+	}
+	.adventure-status a {
+		color: inherit;
+		text-decoration: none;
+	}
+	.adventure-status a:hover {
+		text-decoration: underline;
+	}
 	.overview-corner {
 		display: flex;
 		flex-direction: column;

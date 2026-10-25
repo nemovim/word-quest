@@ -2,6 +2,8 @@ import { OpenRouter } from '@openrouter/sdk';
 
 import { getOpenRouterModel } from './openrouter-config';
 
+import { env } from '$env/dynamic/private';
+
 type OpenRouterMessage = {
 	role: 'developer' | 'system' | 'user' | 'assistant';
 	content: string;
@@ -10,12 +12,12 @@ type OpenRouterMessage = {
 type JsonSchema = Record<string, unknown>;
 
 function getClient(): OpenRouter {
-	if (process.env.OPENROUTER_API_KEY == null || process.env.OPENROUTER_API_KEY.trim() === '') {
+	if (env.OPENROUTER_API_KEY == null || env.OPENROUTER_API_KEY.trim() === '') {
 		throw new Error('OPENROUTER_API_KEY is required.');
 	}
 
 	return new OpenRouter({
-		apiKey: process.env.OPENROUTER_API_KEY,
+		apiKey: env.OPENROUTER_API_KEY,
 		timeoutMs: 15_000,
 		retryConfig: {
 			strategy: 'backoff',
