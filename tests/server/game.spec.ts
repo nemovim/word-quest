@@ -10,6 +10,7 @@ import {
 	refreshPlayer,
 	hurtPlayer,
 	assertExploring,
+	readExploration,
 	actGame,
 	loadGame,
 	rewardStudy,
@@ -97,8 +98,9 @@ beforeEach(() => {
 	);
 	vi.spyOn(model, 'updateOne').mockImplementation((async (filter: any, update: any) => {
 		if (update.$setOnInsert) {
+			const upsertedCount = stored == null ? 1 : 0;
 			stored ??= { _id: 'player', ...structuredClone(update.$setOnInsert) };
-			return { modifiedCount: 0 };
+			return { modifiedCount: 0, upsertedCount };
 		}
 		if (
 			filter['state.revision'] !== undefined &&
@@ -107,12 +109,33 @@ beforeEach(() => {
 			return { modifiedCount: 0 };
 		if (filter.lockUntil?.$lte !== undefined && stored.lockUntil > filter.lockUntil.$lte)
 			return { modifiedCount: 0 };
-		Object.assign(stored, structuredClone(update.$set));
+		for (const [path, value] of Object.entries(update.$set)) {
+			const keys = path.split('.');
+			const last = keys.pop()!;
+			const parent = keys.reduce((object, key) => (object[key] ??= {}), stored);
+			parent[last] = structuredClone(value);
+		}
 		return { modifiedCount: 1 };
 	}) as any);
 });
 
 describe('RPG expedition', () => {
+	it('reuses the checked combat state and saves only changed fields', async () => {
+		const started = await beginExploration(user);
+		const sessionId = started.player!.id;
+		const checked = await readExploration(user, sessionId);
+		vi.mocked(model.findById).mockClear();
+		vi.mocked(model.updateOne).mockClear();
+
+		const reward = await rewardStudy(user, 'once', sessionId, checked);
+
+		expect(reward.reward.damage).toBeGreaterThan(0);
+		expect(model.findById).not.toHaveBeenCalled();
+		expect(model.updateOne).toHaveBeenCalledOnce();
+		const update = vi.mocked(model.updateOne).mock.calls[0][1];
+		expect(update).toMatchObject({ $set: { 'state.battle.hp': reward.battle.hp } });
+		expect(update).not.toHaveProperty('$set.state');
+	});
 	it('loads legacy saves with zero iron and preserves existing materials', async () => {
 		await action('start');
 		delete stored.state.iron;
@@ -186,10 +209,16 @@ describe('RPG expedition', () => {
 		for (let i = 0; i < 40; i++) await action('answer');
 		stored.state.successRate = 70;
 		roll.mockReturnValueOnce(0);
-		await action('upgrade');
+		const upgrade = await action('upgrade');
 		expect(stored.state.gold).toBe(350);
 		expect(stored.state.iron).toBe(22);
 		expect(stored.state.stones).toBe(0);
+		expect(upgrade.game).toMatchObject({
+			revision: stored.state.revision,
+			gold: 350,
+			iron: 22,
+			attack: stored.state.attack
+		});
 		expect(upgradeCost(1)).toEqual({ silver: 0, gold: 0, iron: 6, stones: 0 });
 		for (let i = 0; i < Math.ceil(80 / stored.state.attack); i++) await action('answer');
 		expect(stored.state.expedition.cleared).toBe(true);
@@ -727,12 +756,18 @@ describe('continuous exploration health', () => {
 		const at = start.player!.healedAt!;
 		const clock = vi.spyOn(Date, 'now').mockReturnValue(at);
 		try {
+			vi.mocked(model.updateOne).mockClear();
+			expect((await refreshPlayer(user, id)).revision).toBe(start.revision);
+			expect(model.updateOne).not.toHaveBeenCalled();
 			await hurtPlayer(user, id, 'injury', 5);
+			vi.mocked(model.updateOne).mockClear();
 			clock.mockReturnValue(at + 59999);
 			expect((await refreshPlayer(user, id)).player!.hp).toBe(90);
+			expect(model.updateOne).not.toHaveBeenCalled();
 			clock.mockReturnValue(at + 60000);
 			expect((await refreshPlayer(user, id)).player!.hp).toBe(92);
 			expect((await refreshPlayer(user, id)).player!.hp).toBe(92);
+			expect(model.updateOne).toHaveBeenCalledTimes(1);
 			clock.mockReturnValue(at + 150000);
 			expect((await loadGame(user)).player!.hp).toBe(94);
 			clock.mockReturnValue(at + 180000);

@@ -44,12 +44,12 @@ describe('quiz-card.repository', () => {
 	});
 
 	it('keeps new vocas within one difficulty step of the floored current level', () => {
-		const newUserWindow = calculateQuizDifficultyWindow(1, 0);
-		const experiencedWindow = calculateQuizDifficultyWindow(5, 500);
+		const newUserWindow = calculateQuizDifficultyWindow(1);
+		const experiencedWindow = calculateQuizDifficultyWindow(5);
 
 		expect(newUserWindow).toEqual({ lower: 1, upper: 2, spread: 1 });
 		expect(experiencedWindow).toEqual({ lower: 4, upper: 6, spread: 2 });
-		expect(calculateQuizDifficultyWindow(5.9, 0)).toEqual({ lower: 4, upper: 6, spread: 2 });
+		expect(calculateQuizDifficultyWindow(5.9)).toEqual({ lower: 4, upper: 6, spread: 2 });
 	});
 
 	it('allocates 30% easier, 50% current, and 20% harder vocas', () => {
@@ -64,32 +64,55 @@ describe('quiz-card.repository', () => {
 		]);
 	});
 
-	it('preselects a fixed number of words per level and fills missing quotas from them', async () => {
+	it('includes fractional words in the nearest difficulty quota and fills missing quotas', async () => {
 		const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+		const fractional = makeVoca({
+			_id: 'voca-fractional',
+			difficultyLevel: 3.93,
+			utilityScore: 5,
+			originKey: 'easy-1'
+		});
 		const vocasByLevel = new Map([
 			[
 				4,
 				[
-					makeVoca({ _id: 'voca-easy-1', difficultyLevel: 4, originKey: 'easy-1' }),
-					makeVoca({ _id: 'voca-easy-2', difficultyLevel: 4, originKey: 'easy-2' }),
-					makeVoca({ _id: 'voca-fallback', difficultyLevel: 4, originKey: 'easy-3' })
+					makeVoca({
+						_id: 'voca-easy-2',
+						difficultyLevel: 4,
+						utilityScore: 4,
+						originKey: 'easy-2'
+					}),
+					makeVoca({
+						_id: 'voca-fallback',
+						difficultyLevel: 4,
+						utilityScore: 4,
+						originKey: 'easy-3'
+					})
 				]
 			],
 			[5, []],
 			[6, []],
 			[7, []]
 		]);
-		const selectedVocas = ['voca-easy-1', 'voca-easy-2', 'voca-fallback'].map((_id, index) =>
-			makeVoca({ _id, difficultyLevel: 4, originKey: `easy-${String(index + 1)}` })
-		);
-		vocaFindMock.mockImplementation((filter: { difficultyLevel?: number }) =>
-			filter.difficultyLevel == null
+		const selectedVocas = [fractional, ...(vocasByLevel.get(4) ?? [])];
+		const selectedIds = selectedVocas.map((voca) => voca._id);
+		type CandidateFilter = {
+			difficultyLevel?: number;
+			$or?: { difficultyLevel: { $gte?: number } }[];
+		};
+		vocaFindMock.mockImplementation((filter: CandidateFilter) =>
+			filter.difficultyLevel == null && filter.$or == null
 				? { lean: async () => selectedVocas }
 				: {
 						sort: () => ({
 							limit: () => ({
 								select: () => ({
-									lean: async () => vocasByLevel.get(filter.difficultyLevel ?? 0) ?? []
+									lean: async () =>
+										filter.$or
+											? filter.$or[0]?.difficultyLevel.$gte === 3.5
+												? [fractional]
+												: []
+											: (vocasByLevel.get(filter.difficultyLevel ?? 0) ?? [])
 								})
 							})
 						})
@@ -98,28 +121,32 @@ describe('quiz-card.repository', () => {
 		quizCardFindMock
 			.mockReturnValueOnce({
 				select: () => ({
-					lean: async () =>
-						['voca-easy-1', 'voca-easy-2', 'voca-fallback'].map((vocaId) => ({ vocaId }))
+					lean: async () => selectedIds.map((vocaId) => ({ vocaId }))
 				})
 			})
 			.mockReturnValueOnce({
-				lean: async () =>
-					['voca-easy-1', 'voca-easy-2', 'voca-fallback'].map((vocaId) => makeQuizCard({ vocaId }))
+				lean: async () => selectedIds.map((vocaId) => makeQuizCard({ vocaId }))
 			});
 
 		const result = await findNewQuizCandidates({
 			currentLevel: 5,
-			evidenceCount: 500,
 			excludedVocaIds: ['voca-reviewed'],
 			limit: 10
 		});
 
 		expect(result.map((candidate) => candidate.voca._id)).toEqual([
-			'voca-easy-1',
+			'voca-fractional',
 			'voca-easy-2',
 			'voca-fallback'
 		]);
-		expect(vocaFindMock).toHaveBeenCalledTimes(4);
+		expect(result[0]?.voca.difficultyLevel).toBe(3.93);
+		expect(vocaFindMock).toHaveBeenCalledTimes(7);
+		expect(vocaFindMock).toHaveBeenCalledWith({
+			$or: [{ difficultyLevel: { $gte: 3.5, $lt: 4 } }, { difficultyLevel: { $gt: 4, $lt: 4.5 } }],
+			utilityScore: { $gte: 1 },
+			quizExcludedByReportId: { $exists: false },
+			_id: { $nin: ['voca-reviewed'] }
+		});
 		expect(vocaFindMock).toHaveBeenCalledWith({
 			difficultyLevel: 4,
 			utilityScore: { $gte: 1 },
@@ -127,15 +154,15 @@ describe('quiz-card.repository', () => {
 			_id: { $nin: ['voca-reviewed'] }
 		});
 		expect(quizCardFindMock).toHaveBeenNthCalledWith(1, {
-			vocaId: { $in: ['voca-easy-1', 'voca-easy-2', 'voca-fallback'] },
+			vocaId: { $in: selectedIds },
 			'examples.0': { $exists: true }
 		});
 		expect(quizCardFindMock).toHaveBeenNthCalledWith(2, {
-			vocaId: { $in: ['voca-easy-1', 'voca-easy-2', 'voca-fallback'] },
+			vocaId: { $in: selectedIds },
 			'examples.0': { $exists: true }
 		});
 		expect(vocaFindMock).toHaveBeenLastCalledWith({
-			_id: { $in: ['voca-easy-1', 'voca-easy-2', 'voca-fallback'] }
+			_id: { $in: selectedIds }
 		});
 		expect(randomSpy).toHaveBeenCalledTimes(3);
 	});
@@ -144,7 +171,6 @@ describe('quiz-card.repository', () => {
 		await expect(
 			findNewQuizCandidates({
 				currentLevel: 3,
-				evidenceCount: 0,
 				excludedVocaIds: [],
 				limit: 0
 			})

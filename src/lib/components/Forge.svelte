@@ -6,28 +6,31 @@
 
 	import { enhance } from '$app/forms';
 	import { upgradeChance, upgradeCost, type UpgradeKind } from '$lib/shared/utils/game.util';
+	type ForgeGame = {
+		revision: number;
+		gold: number;
+		iron: number;
+		stones: number;
+		silver?: number;
+		hitGold?: number;
+		incomeUpgrades?: number;
+		weapon: number;
+		attack: number;
+		criticalChance: number;
+		successRate?: number;
+		baseSuccessRate?: number;
+		attackUpgrades?: number;
+		criticalUpgrades?: number;
+	};
 	let {
-		game,
+		game: pageGame,
 		form
 	}: {
-		game: {
-			revision: number;
-			gold: number;
-			iron: number;
-			stones: number;
-			silver?: number;
-			hitGold?: number;
-			incomeUpgrades?: number;
-			weapon: number;
-			attack: number;
-			criticalChance: number;
-			successRate?: number;
-			baseSuccessRate?: number;
-			attackUpgrades?: number;
-			criticalUpgrades?: number;
-		};
-		form: { message?: string } | null;
+		game: ForgeGame;
+		form: { message?: string; game?: ForgeGame } | null;
 	} = $props();
+	let savedGame = $state<ForgeGame>();
+	const game = $derived(savedGame && savedGame.revision > pageGame.revision ? savedGame : pageGame);
 	let selected = $state<UpgradeKind>('chance');
 	let busy = $state(false);
 	let phase = $state<'idle' | 'charging' | 'success' | 'failure' | 'error'>('idle');
@@ -174,9 +177,10 @@
 			}
 			if (selected === 'chance') {
 				busy = true;
-				return async ({ update }) => {
+				return async ({ update, result }) => {
 					try {
-						await update();
+						await update({ invalidateAll: false });
+						if (result.type === 'success' && form?.game) savedGame = form.game;
 					} finally {
 						busy = false;
 					}
@@ -202,8 +206,9 @@
 						timer = setTimeout(resolve, Math.max(0, duration - (Date.now() - started)));
 					});
 					if (!alive) return;
-					await update();
+					await update({ invalidateAll: false });
 					if (!alive) return;
+					if (result.type === 'success' && form?.game) savedGame = form.game;
 					if (result.type === 'success')
 						outcome = {
 							success: game.weapon > before.weapon || rate > before.chance,
@@ -454,6 +459,9 @@
 		gap: 0.5rem;
 		width: 100%;
 		padding: 0.75rem;
+	}
+	.forge:not(.working) .upgrade:disabled {
+		cursor: not-allowed;
 	}
 	.upgrade-title {
 		font-weight: 700;

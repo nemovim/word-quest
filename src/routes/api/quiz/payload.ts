@@ -2,12 +2,15 @@ import { QUIZ_REPORT_ISSUES, type QuizReportIssue } from '$lib/shared/types/quiz
 import { parseQuizTarget } from '$lib/usecases/quiz.usecase';
 
 type QuizActionPayload = {
+	sessionId?: string;
+	actionId?: string;
 	vocaId?: string;
 	quizExampleId?: string;
 	promptLang?: string;
 	answerLang?: string;
 	answerText?: string;
 	isRetry?: boolean;
+	passOnWrong?: boolean;
 	regenerate?: boolean;
 	issues?: unknown;
 	details?: string;
@@ -35,21 +38,28 @@ export async function parseCheckPayload(request: Request) {
 
 	if (
 		typeof payload.answerText !== 'string' ||
-		(payload.isRetry != null && typeof payload.isRetry !== 'boolean')
+		(payload.isRetry != null && typeof payload.isRetry !== 'boolean') ||
+		(payload.passOnWrong != null && typeof payload.passOnWrong !== 'boolean')
 	) {
 		throw new Error('Invalid quiz check request.');
 	}
 
 	return {
+		...parseCombatPayload(payload),
 		...parseQuizTarget(payload),
 		answerText: payload.answerText,
-		isRetry: payload.isRetry ?? false
+		isRetry: payload.isRetry ?? false,
+		passOnWrong: payload.passOnWrong === true
 	};
 }
 
 export async function parsePassPayload(request: Request) {
 	const payload = (await request.json()) as QuizActionPayload;
-	return { ...parseQuizTarget(payload), isRetry: payload.isRetry === true };
+	return {
+		...parseCombatPayload(payload),
+		...parseQuizTarget(payload),
+		isRetry: payload.isRetry === true
+	};
 }
 
 export async function parseJudgePayload(request: Request) {
@@ -84,8 +94,7 @@ export async function parseReportPayload(request: Request) {
 	};
 }
 
-export async function parseCombatPayload(request: Request) {
-	const { sessionId, actionId } = await request.clone().json();
+function parseCombatPayload({ sessionId, actionId }: QuizActionPayload) {
 	if (
 		typeof sessionId !== 'string' ||
 		!sessionId ||

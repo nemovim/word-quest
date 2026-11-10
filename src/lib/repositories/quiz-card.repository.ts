@@ -19,10 +19,11 @@ type PreselectedVoca = Pick<VocaEntity, '_id' | 'originKey' | 'difficultyLevel' 
 
 const PRESELECTED_VOCAS_PER_LEVEL = 100;
 
-export function calculateQuizDifficultyWindow(
-	currentLevel: number,
-	_evidenceCount: number
-): { lower: number; upper: number; spread: number } {
+export function calculateQuizDifficultyWindow(currentLevel: number): {
+	lower: number;
+	upper: number;
+	spread: number;
+} {
 	const baseDifficulty = Math.trunc(clampNumber(currentLevel, MIN_LEVEL, MAX_LEVEL));
 	const lower = Math.max(MIN_LEVEL, baseDifficulty - 1);
 	const upper = Math.min(MAX_LEVEL, baseDifficulty + 1);
@@ -89,11 +90,10 @@ export async function countVocasWithExamples(): Promise<number> {
 
 async function findPreselectedVocas(input: {
 	currentLevel: number;
-	evidenceCount: number;
 	excludedVocaIds: string[];
 	targetLang?: VocaEntity['targetLang'];
 }): Promise<PreselectedVoca[]> {
-	const difficultyWindow = calculateQuizDifficultyWindow(input.currentLevel, input.evidenceCount);
+	const difficultyWindow = calculateQuizDifficultyWindow(input.currentLevel);
 	const difficultyLevels = Array.from(
 		{ length: MAX_LEVEL - MIN_LEVEL + 1 },
 		(_, index) => MIN_LEVEL + index
@@ -102,27 +102,50 @@ async function findPreselectedVocas(input: {
 			difficultyLevel >= difficultyWindow.lower && difficultyLevel <= difficultyWindow.upper
 	);
 	const documentsByLevel = await Promise.all(
-		difficultyLevels.map((difficultyLevel) =>
-			VocaModel.find({
-				difficultyLevel,
+		difficultyLevels.map(async (difficultyLevel) => {
+			const filter = {
 				...(input.targetLang == null ? {} : { targetLang: input.targetLang }),
 				utilityScore: { $gte: MIN_RECOMMENDED_UTILITY_SCORE },
 				quizExcludedByReportId: { $exists: false },
 				...(input.excludedVocaIds.length === 0 ? {} : { _id: { $nin: input.excludedVocaIds } })
-			})
-				.sort({ utilityScore: -1, originKey: 1 })
-				.limit(PRESELECTED_VOCAS_PER_LEVEL)
-				.select({ originKey: 1, difficultyLevel: 1, utilityScore: 1 })
-				.lean()
-		)
+			};
+			// Keep the indexed equality sort for the bulk of the words.
+			const difficultyFilters = [
+				{ difficultyLevel },
+				{
+					$or: [
+						{ difficultyLevel: { $gte: difficultyLevel - 0.5, $lt: difficultyLevel } },
+						{ difficultyLevel: { $gt: difficultyLevel, $lt: difficultyLevel + 0.5 } }
+					]
+				}
+			];
+			const [whole, fractional] = await Promise.all(
+				difficultyFilters.map((difficultyFilter) =>
+					VocaModel.find({ ...filter, ...difficultyFilter })
+						.sort({ utilityScore: -1, originKey: 1 })
+						.limit(PRESELECTED_VOCAS_PER_LEVEL)
+						.select({ originKey: 1, difficultyLevel: 1, utilityScore: 1 })
+						.lean()
+				)
+			);
+
+			if (fractional.length === 0) return whole.map(toPojo<PreselectedVoca>);
+			return [...whole, ...fractional]
+				.map(toPojo<PreselectedVoca>)
+				.sort(
+					(left, right) =>
+						(right.utilityScore ?? 0) - (left.utilityScore ?? 0) ||
+						Buffer.compare(Buffer.from(left.originKey), Buffer.from(right.originKey))
+				)
+				.slice(0, PRESELECTED_VOCAS_PER_LEVEL);
+		})
 	);
 
-	return documentsByLevel.flat().map(toPojo<PreselectedVoca>);
+	return documentsByLevel.flat();
 }
 
 export async function findNewQuizCandidates(input: {
 	currentLevel: number;
-	evidenceCount: number;
 	excludedVocaIds: string[];
 	limit: number;
 	targetLang?: VocaEntity['targetLang'];
@@ -158,9 +181,10 @@ export async function findNewQuizCandidates(input: {
 	const candidatesByDifficulty = new Map<number, PreselectedVoca[]>();
 	for (const candidate of candidates) {
 		if (candidate.difficultyLevel == null) continue;
-		const group = candidatesByDifficulty.get(candidate.difficultyLevel) ?? [];
+		const difficultyBand = Math.round(candidate.difficultyLevel);
+		const group = candidatesByDifficulty.get(difficultyBand) ?? [];
 		group.push(candidate);
-		candidatesByDifficulty.set(candidate.difficultyLevel, group);
+		candidatesByDifficulty.set(difficultyBand, group);
 	}
 	const selected = calculateQuizDifficultyQuotas(input.currentLevel, input.limit).flatMap(
 		({ difficultyLevel, count }) =>

@@ -25,6 +25,7 @@ const LEVEL_MASTERY_BASELINE_LOGIT = Math.log(
 	LEVEL_MASTERY_BASELINE / (1 - LEVEL_MASTERY_BASELINE)
 );
 const MASTERY_BY_STAGE = [0, 0.2, 0.4, 0.6, 0.75, 0.78, 0.8, 0.81] as const;
+type VocaDifficulty = Pick<Voca, '_id' | 'difficultyLevel'>;
 
 function shouldAppendLevelHistory(currentUser: User, now: Date): boolean {
 	const lastHistory = currentUser.levelHistory.at(-1);
@@ -92,7 +93,7 @@ function getExpectedMastery(level: number, difficultyLevel: number): number {
 	return 1 / (1 + Math.exp(-logit));
 }
 
-export function calculateVocabularyLevel(reviews: LevelReview[], vocas: Voca[]): number {
+export function calculateVocabularyLevel(reviews: LevelReview[], vocas: VocaDifficulty[]): number {
 	const selectedReviews = selectRecentLevelReviews(reviews);
 	const vocaById = new Map(vocas.map((currentVoca) => [currentVoca._id, currentVoca]));
 	const samples = selectedReviews.flatMap((currentReview) => {
@@ -166,7 +167,7 @@ export async function saveUser(currentUser: User): Promise<User> {
 export function rebuildUserLevel(
 	currentUser: User,
 	reviews: LevelReview[],
-	vocas: Voca[],
+	vocas: VocaDifficulty[],
 	now: Date
 ): User {
 	const nextLevel = calculateVocabularyLevel(reviews, vocas);

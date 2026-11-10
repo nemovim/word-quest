@@ -46,9 +46,9 @@ function mockBaseReads() {
 	vi.spyOn(VocaRepository, 'findPermanentlyExcludedVocaIds').mockResolvedValue([]);
 	vi.spyOn(ReviewRepository, 'findReviewByUserAndVoca').mockResolvedValue(makeReview());
 	vi.spyOn(ReviewRepository, 'countAnsweredReviewsByVoca').mockResolvedValue(1);
-	vi.spyOn(ReviewRepository, 'countDistinctAnsweredVocasByUser').mockResolvedValue(0);
 	vi.spyOn(ReviewRepository, 'findReviewedVocaIdsByUserDirection').mockResolvedValue([]);
 	vi.spyOn(QuizReportRepository, 'findPendingReportedVocaIds').mockResolvedValue([]);
+	vi.spyOn(QuizReportRepository, 'hasPendingReportForVoca').mockResolvedValue(false);
 	vi.spyOn(ReviewRepository, 'findRecentDistinctAnsweredReviews').mockResolvedValue([
 		makeReview({ correctCount: 1 })
 	]);
@@ -58,6 +58,7 @@ function mockBaseReads() {
 	vi.spyOn(NewVocaLimitService, 'getRemainingNewVocaCount').mockResolvedValue(40);
 	vi.spyOn(NewVocaLimitService, 'assertCanStartNewVoca').mockResolvedValue();
 	vi.spyOn(VocaRepository, 'findVocaByIds').mockResolvedValue([makeVoca()]);
+	vi.spyOn(VocaRepository, 'findVocaDifficultiesByIds').mockResolvedValue([makeVoca()]);
 	vi.spyOn(UserService, 'rebuildUserLevel').mockImplementation((user) => user);
 	vi.spyOn(UserService, 'saveUser').mockImplementation(async (user) => user);
 }
@@ -128,6 +129,29 @@ describe('quiz.usecase', () => {
 		});
 		expect(upsertReviewSpy).toHaveBeenCalled();
 		expect(judgeAnswerSpy).not.toHaveBeenCalled();
+	});
+
+	it('returns pass feedback on the final wrong attempt without recording another miss', async () => {
+		const result = await checkQuizAnswer({
+			...baseRequest,
+			answerText: 'pear',
+			isRetry: true,
+			passOnWrong: true
+		});
+
+		expect(result).toMatchObject({ status: 'pass', correctAnswer: 'apple' });
+		expect(ReviewRepository.upsertReview).not.toHaveBeenCalled();
+	});
+
+	it('accepts a correct answer on the final attempt', async () => {
+		const result = await checkQuizAnswer({
+			...baseRequest,
+			answerText: 'apple',
+			isRetry: true,
+			passOnWrong: true
+		});
+
+		expect(result.status).toBe('correct');
 	});
 
 	it('loads new quiz candidates without creating reviews or saving user level', async () => {
@@ -223,17 +247,70 @@ describe('quiz.usecase', () => {
 
 		expect(result.encounters).toHaveLength(5);
 		expect(result.encounters.every((encounter) => !encounter.isNew)).toBe(true);
-		expect(findCandidatesSpy).toHaveBeenCalledWith(expect.objectContaining({ limit: 0 }));
+		expect(findCandidatesSpy).not.toHaveBeenCalled();
+		expect(ReviewRepository.findReviewedVocaIdsByUserDirection).not.toHaveBeenCalled();
+	});
+
+	it('fills the slot of a due review that has no example', async () => {
+		const reviewed = Array.from({ length: 5 }, (_, index) =>
+			makeReview({ vocaId: `due-${index}`, correctCount: 1 })
+		);
+		vi.spyOn(ReviewRepository, 'findDueReviewGroupsByUser').mockResolvedValue({
+			reviewed,
+			new: []
+		});
+		vi.mocked(ReviewRepository.findReviewedVocaIdsByUserDirection).mockResolvedValue(
+			reviewed.map(({ vocaId }) => vocaId)
+		);
+		vi.mocked(VocaRepository.findVocaByIds).mockResolvedValue(
+			reviewed.map(({ vocaId }) => makeVoca({ _id: vocaId }))
+		);
+		vi.spyOn(QuizCardRepository, 'findQuizCardsByVocaIds').mockResolvedValue(
+			reviewed.slice(1).map(({ vocaId }) => makeQuizCard({ vocaId }))
+		);
+		const candidates = vi
+			.spyOn(QuizCardRepository, 'findNewQuizCandidates')
+			.mockResolvedValue([
+				{ voca: makeVoca({ _id: 'new-word' }), quizCard: makeQuizCard({ vocaId: 'new-word' }) }
+			]);
+
+		const result = await loadQuizPage(baseRequest.user);
+
+		expect(result.encounters.map(({ vocaId }) => vocaId)).toEqual([
+			'due-1',
+			'due-2',
+			'due-3',
+			'due-4',
+			'new-word'
+		]);
+		expect(candidates).toHaveBeenCalledOnce();
+		expect(candidates).toHaveBeenCalledWith(expect.objectContaining({ limit: 1 }));
 	});
 
 	it('does not save a quiz result for a word with a pending report from any user', async () => {
-		vi.mocked(QuizReportRepository.findPendingReportedVocaIds).mockResolvedValue(['voca-1']);
+		vi.mocked(QuizReportRepository.hasPendingReportForVoca).mockResolvedValue(true);
 		const upsertReviewSpy = vi.spyOn(ReviewRepository, 'upsertReview');
 
 		await expect(passQuizAnswer(baseRequest)).rejects.toThrow(
 			'신고 처리 중이거나 퀴즈에서 제외된 단어는 학습 기록에 저장할 수 없습니다.'
 		);
 		expect(upsertReviewSpy).not.toHaveBeenCalled();
+	});
+
+	it('does not save a result for a permanently excluded word', async () => {
+		vi.mocked(VocaRepository.getVocaById).mockResolvedValue(
+			makeVoca({ quizExcludedByReportId: 'report-1' })
+		);
+
+		await expect(passQuizAnswer(baseRequest)).rejects.toThrow(
+			'신고 처리 중이거나 퀴즈에서 제외된 단어는 학습 기록에 저장할 수 없습니다.'
+		);
+		expect(ReviewRepository.upsertReview).not.toHaveBeenCalled();
+	});
+
+	it('reuses the word already loaded by the check endpoint', async () => {
+		await checkQuizAnswer({ ...baseRequest, answerText: 'apple' }, makeVoca());
+		expect(VocaRepository.getVocaById).not.toHaveBeenCalled();
 	});
 
 	it('excludes words with pending reports from every user quiz', async () => {
@@ -298,12 +375,11 @@ describe('quiz.usecase', () => {
 		);
 	});
 
-	it('passes existing level evidence into the unified candidate selection', async () => {
+	it('excludes previously reviewed words from new candidates', async () => {
 		vi.spyOn(ReviewRepository, 'findDueReviewGroupsByUser').mockResolvedValue({
 			reviewed: [],
 			new: []
 		});
-		vi.mocked(ReviewRepository.countDistinctAnsweredVocasByUser).mockResolvedValue(37);
 		vi.mocked(ReviewRepository.findReviewedVocaIdsByUserDirection).mockResolvedValue([
 			'voca-reviewed'
 		]);
@@ -314,7 +390,7 @@ describe('quiz.usecase', () => {
 		await loadQuizPage(baseRequest.user);
 
 		expect(findCandidatesSpy).toHaveBeenCalledWith(
-			expect.objectContaining({ evidenceCount: 37, excludedVocaIds: ['voca-reviewed'] })
+			expect.objectContaining({ excludedVocaIds: ['voca-reviewed'] })
 		);
 	});
 
@@ -596,7 +672,7 @@ describe('quiz.usecase', () => {
 		await checkQuizAnswer({ ...baseRequest, user: currentUser, answerText: 'apple' });
 
 		expect(ReviewRepository.findRecentDistinctAnsweredReviews).toHaveBeenCalledWith('user-1', 500);
-		expect(VocaRepository.findVocaByIds).toHaveBeenCalledWith(['voca-1']);
+		expect(VocaRepository.findVocaDifficultiesByIds).toHaveBeenCalledWith(['voca-1']);
 		expect(UserService.saveUser).toHaveBeenCalledWith(nextUser);
 	});
 });

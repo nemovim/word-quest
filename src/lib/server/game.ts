@@ -1,4 +1,5 @@
 import { randomInt, randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 
 import { error } from '@sveltejs/kit';
 import mongoose from 'mongoose';
@@ -81,6 +82,7 @@ type GameState = {
 	victories: number;
 	expedition: Expedition | null;
 };
+type GameSnapshot = { state: GameState; original: GameState };
 const schema = new mongoose.Schema({
 	_id: { type: String, required: true },
 	state: { type: mongoose.Schema.Types.Mixed, required: true },
@@ -134,40 +136,56 @@ function battleView(battle: Battle): BattleView {
 		level: battle.level ?? 10
 	};
 }
+
+function combatUpdate(
+	state: GameState,
+	battle: Battle,
+	reward: CombatUpdate['reward']
+): CombatUpdate {
+	return {
+		revision: state.revision,
+		hitGold: state.hitGold,
+		player: state.player,
+		reward,
+		battle: battleView(battle),
+		wallet: { gold: state.gold, iron: state.iron, stones: state.stones, silver: state.silver }
+	};
+}
+
 async function mutateCombat(
 	user: User,
 	operation: (
 		state: GameState,
 		battle: Battle
-	) => StudyReward & { healing?: number; playerDamage?: number }
+	) => StudyReward & { healing?: number; playerDamage?: number },
+	loaded?: GameSnapshot | null
 ): Promise<CombatUpdate> {
-	await Game.updateOne(
-		{ _id: user._id },
-		{ $setOnInsert: { state: initial(), lockUntil: 0 } },
-		{ upsert: true }
-	);
 	for (let attempt = 0; attempt < 5; attempt += 1) {
-		const state = await getState(user);
+		let snapshot = attempt === 0 && loaded !== undefined ? loaded : await readGameState(user);
+		if (!snapshot) {
+			const original = initial();
+			const inserted = await Game.updateOne(
+				{ _id: user._id },
+				{ $setOnInsert: { state: original, lockUntil: 0 } },
+				{ upsert: true }
+			);
+			if (!inserted.upsertedCount) continue;
+			snapshot = { original, state: structuredClone(original) };
+		}
+		const state = withUpgradeRate(snapshot.state, user);
 		recoverPlayer(state.player);
 		const battle = state.battle ?? freshBattle(user.currentLevel);
-		battle.claims = battle.claims.filter((claim) => Date.now() - claim.at < WINDOW_MS);
+		const cutoff = Date.now() - WINDOW_MS;
+		battle.claims = battle.claims.filter((claim) => claim.at > cutoff);
 		const reward = operation(state, battle);
 		const revision = state.revision;
 		state.battle = battle;
 		state.revision += 1;
 		const saved = await Game.updateOne(
 			{ _id: user._id, 'state.revision': revision, lockUntil: { $lte: Date.now() } },
-			{ $set: { state } }
+			{ $set: changedGameFields(snapshot.original, state) }
 		);
-		if (saved.modifiedCount === 1)
-			return {
-				revision: state.revision,
-				hitGold: state.hitGold,
-				player: state.player,
-				reward,
-				battle: battleView(battle),
-				wallet: { gold: state.gold, iron: state.iron, stones: state.stones, silver: state.silver }
-			};
+		if (saved.modifiedCount === 1) return combatUpdate(state, battle, reward);
 	}
 	error(409, '다른 요청이 진행 중이에요. 잠시 후 다시 시도해 주세요.');
 }
@@ -175,47 +193,57 @@ const emptyReward = (): StudyReward => ({ gold: 0, iron: 0, stones: 0, damage: 0
 export async function rewardStudy(
 	user: User,
 	key: string,
-	sessionId?: string
+	sessionId?: string,
+	loaded?: GameSnapshot
 ): Promise<CombatUpdate> {
-	return mutateCombat(user, (state, battle) => {
-		const reward = emptyReward();
-		if (sessionId) assertPlayer(state, sessionId);
-		if (battle.claims.some((claim) => claim.key === `hit:${key}`)) return reward;
-		battle.claims.push({ key: `hit:${key}`, at: Date.now() });
-		reward.critical = randomInt(1000) < Math.round(state.criticalChance * 10);
-		reward.damage = Math.min(battle.hp, state.attack * (reward.critical ? 2 : 1));
-		battle.hp -= reward.damage;
-		reward.gold = state.hitGold * (battle.boss ? 2 : 1);
-		state.gold += reward.gold;
-		if (battle.hp === 0) {
-			reward.clear = battle.boss ? 'boss' : 'dungeon';
-			battle.chests.push({ id: randomUUID(), boss: battle.boss, level: battle.level ?? 10 });
-			if (battle.boss) state.victories += 1;
-			battle.kills += 1;
-			Object.assign(battle, spawnMonster(user.currentLevel));
-		}
-		return reward;
-	});
+	return mutateCombat(
+		user,
+		(state, battle) => {
+			const reward = emptyReward();
+			if (sessionId) assertPlayer(state, sessionId);
+			if (battle.claims.some((claim) => claim.key === `hit:${key}`)) return reward;
+			battle.claims.push({ key: `hit:${key}`, at: Date.now() });
+			reward.critical = randomInt(1000) < Math.round(state.criticalChance * 10);
+			reward.damage = Math.min(battle.hp, state.attack * (reward.critical ? 2 : 1));
+			battle.hp -= reward.damage;
+			reward.gold = state.hitGold * (battle.boss ? 2 : 1);
+			state.gold += reward.gold;
+			if (battle.hp === 0) {
+				reward.clear = battle.boss ? 'boss' : 'dungeon';
+				battle.chests.push({ id: randomUUID(), boss: battle.boss, level: battle.level ?? 10 });
+				if (battle.boss) state.victories += 1;
+				battle.kills += 1;
+				Object.assign(battle, spawnMonster(user.currentLevel));
+			}
+			return reward;
+		},
+		loaded
+	);
 }
 export async function healMonster(
 	user: User,
 	key: string,
 	level = 3,
-	sessionId?: string
+	sessionId?: string,
+	loaded?: GameSnapshot
 ): Promise<CombatUpdate> {
-	return mutateCombat(user, (state, battle) => {
-		if (sessionId) assertPlayer(state, sessionId);
-		const reward = { ...emptyReward(), healing: 0, playerDamage: 0, playerCritical: !!sessionId };
-		if (battle.claims.some((claim) => claim.key === `pass:${key}`)) return reward;
-		battle.claims.push({ key: `pass:${key}`, at: Date.now() });
-		reward.healing = Math.min(wordCombatAmount(level, 3), battle.maxHp - battle.hp);
-		battle.hp += reward.healing;
-		if (sessionId) {
-			const player = assertPlayer(state, sessionId);
-			reward.playerDamage = damagePlayer(player, level, battle.boss, true);
-		}
-		return reward;
-	});
+	return mutateCombat(
+		user,
+		(state, battle) => {
+			if (sessionId) assertPlayer(state, sessionId);
+			const reward = { ...emptyReward(), healing: 0, playerDamage: 0, playerCritical: !!sessionId };
+			if (battle.claims.some((claim) => claim.key === `pass:${key}`)) return reward;
+			battle.claims.push({ key: `pass:${key}`, at: Date.now() });
+			reward.healing = Math.min(wordCombatAmount(level, 3), battle.maxHp - battle.hp);
+			battle.hp += reward.healing;
+			if (sessionId) {
+				const player = assertPlayer(state, sessionId);
+				reward.playerDamage = damagePlayer(player, level, battle.boss, true);
+			}
+			return reward;
+		},
+		loaded
+	);
 }
 const RECOVERY_MS = 10 * 60 * 1000;
 function recoverPlayer(player?: PlayerHealth) {
@@ -251,8 +279,15 @@ function assertPlayer(state: GameState, sessionId: string) {
 		error(409, '탐험이 종료되었어요. 대시보드에서 다시 출발해 주세요.');
 	return state.player;
 }
+export async function readExploration(user: User, sessionId: string): Promise<GameSnapshot> {
+	const snapshot = await readGameState(user);
+	if (!snapshot) error(409, '탐험이 종료되었어요. 대시보드에서 다시 출발해 주세요.');
+	assertPlayer(snapshot.state, sessionId);
+	return snapshot;
+}
 export async function assertExploring(user: User, sessionId: string) {
-	return assertPlayer(await getState(user), sessionId);
+	const { state } = await readExploration(user, sessionId);
+	return state.player!;
 }
 export async function beginExploration(user: User): Promise<CombatUpdate> {
 	return mutateCombat(user, (state) => {
@@ -263,25 +298,47 @@ export async function beginExploration(user: User): Promise<CombatUpdate> {
 	});
 }
 export async function refreshPlayer(user: User, sessionId: string): Promise<CombatUpdate> {
-	return mutateCombat(user, (state) => {
-		assertPlayer(state, sessionId);
-		return emptyReward();
-	});
+	for (let attempt = 0; attempt < 5; attempt += 1) {
+		const { state, original } = await readExploration(user, sessionId);
+		const player = assertPlayer(state, sessionId);
+		const battle = state.battle ?? freshBattle(user.currentLevel);
+		const previousHp = player.hp;
+		const previousHealedAt = player.healedAt;
+		if (player.hp < player.maxHp) recoverPlayer(player);
+		if (state.battle && player.hp === previousHp && player.healedAt === previousHealedAt) {
+			return combatUpdate(state, battle, emptyReward());
+		}
+
+		const revision = state.revision;
+		state.battle = battle;
+		state.revision += 1;
+		const saved = await Game.updateOne(
+			{ _id: user._id, 'state.revision': revision, lockUntil: { $lte: Date.now() } },
+			{ $set: changedGameFields(original, state) }
+		);
+		if (saved.modifiedCount === 1) return combatUpdate(state, battle, emptyReward());
+	}
+	error(409, '다른 요청이 진행 중이에요. 잠시 후 다시 시도해 주세요.');
 }
 export async function hurtPlayer(
 	user: User,
 	sessionId: string,
 	actionId: string,
-	level: number
+	level: number,
+	loaded?: GameSnapshot
 ): Promise<CombatUpdate> {
-	return mutateCombat(user, (state, battle) => {
-		const reward = { ...emptyReward(), playerDamage: 0 };
-		if (battle.claims.some((c) => c.key === `hurt:${sessionId}:${actionId}`)) return reward;
-		const player = assertPlayer(state, sessionId);
-		reward.playerDamage = damagePlayer(player, level, battle.boss);
-		battle.claims.push({ key: `hurt:${sessionId}:${actionId}`, at: Date.now() });
-		return reward;
-	});
+	return mutateCombat(
+		user,
+		(state, battle) => {
+			const reward = { ...emptyReward(), playerDamage: 0 };
+			if (battle.claims.some((c) => c.key === `hurt:${sessionId}:${actionId}`)) return reward;
+			const player = assertPlayer(state, sessionId);
+			reward.playerDamage = damagePlayer(player, level, battle.boss);
+			battle.claims.push({ key: `hurt:${sessionId}:${actionId}`, at: Date.now() });
+			return reward;
+		},
+		loaded
+	);
 }
 export async function openChest(user: User, id: string): Promise<CombatUpdate> {
 	return mutateCombat(user, (state, battle) => {
@@ -309,10 +366,31 @@ export async function openChest(user: User, id: string): Promise<CombatUpdate> {
 	});
 }
 
-async function getState(user: User): Promise<GameState> {
-	const document = await Game.findById(user._id).lean<{
-		state: GameState & { combatVersion?: number };
+function changedGameFields(original: GameState, state: GameState): Record<string, unknown> {
+	const changed: Record<string, unknown> = {};
+	function addChanges(
+		prefix: string,
+		before: Record<string, unknown>,
+		after: Record<string, unknown>
+	) {
+		for (const [key, value] of Object.entries(after)) {
+			if (!isDeepStrictEqual(before[key], value)) changed[prefix + key] = value;
+		}
+	}
+	const { battle, ...fields } = state;
+	addChanges('state.', original, fields);
+	if (battle && original.battle) addChanges('state.battle.', original.battle, battle);
+	else if (battle) changed['state.battle'] = battle;
+	return changed;
+}
+
+async function readGameState(user: User, includeLegacy = false): Promise<GameSnapshot | null> {
+	const projection = includeLegacy ? undefined : { 'state.expedition': 0, 'state.journey': 0 };
+	const document = await Game.findById(user._id, projection).lean<{
+		state: GameState;
 	}>();
+	if (!document) return null;
+	const original = structuredClone(document.state);
 	if (document && (document.state.combatVersion ?? 0) < 2) {
 		const battle = document.state.battle;
 		if (battle) {
@@ -351,24 +429,25 @@ async function getState(user: User): Promise<GameState> {
 		document.state.combatVersion = 5;
 	}
 
-	const state = document
-		? {
-				...document.state,
-				silver: document.state.silver ?? 0,
-				hitGold: document.state.hitGold ?? 1,
-				incomeUpgrades: document.state.incomeUpgrades ?? 0,
-				chargeVersion: 1,
-				successRate: document.state.chargeVersion === 1 ? (document.state.successRate ?? 0) : 0,
-				chanceUpgrades:
-					document.state.chargeVersion === 1 ? (document.state.chanceUpgrades ?? 0) : 0,
-				attackUpgrades: document.state.attackUpgrades ?? document.state.weapon,
-				criticalUpgrades: document.state.criticalUpgrades ?? document.state.weapon,
-				iron: document.state.iron ?? 0,
-				upgradeFailures: document.state.upgradeFailures ?? 0,
-				attack: document.state.attack ?? 10 + document.state.weapon * 3,
-				criticalChance: document.state.criticalChance ?? 20
-			}
-		: initial();
+	const state = {
+		...document.state,
+		silver: document.state.silver ?? 0,
+		hitGold: document.state.hitGold ?? 1,
+		incomeUpgrades: document.state.incomeUpgrades ?? 0,
+		chargeVersion: 1,
+		successRate: document.state.chargeVersion === 1 ? (document.state.successRate ?? 0) : 0,
+		chanceUpgrades: document.state.chargeVersion === 1 ? (document.state.chanceUpgrades ?? 0) : 0,
+		attackUpgrades: document.state.attackUpgrades ?? document.state.weapon,
+		criticalUpgrades: document.state.criticalUpgrades ?? document.state.weapon,
+		iron: document.state.iron ?? 0,
+		upgradeFailures: document.state.upgradeFailures ?? 0,
+		attack: document.state.attack ?? 10 + document.state.weapon * 3,
+		criticalChance: document.state.criticalChance ?? 20
+	};
+	return { original, state: withUpgradeRate(state, user) };
+}
+
+function withUpgradeRate(state: GameState, user: User): GameState {
 	const base = baseUpgradeChance(user.currentLevel);
 	return {
 		...state,
@@ -377,8 +456,9 @@ async function getState(user: User): Promise<GameState> {
 	};
 }
 
-export async function loadGame(user: User) {
-	let state = await getState(user);
+export async function loadGame(user: User, includeLegacy = true) {
+	let snapshot = await readGameState(user, includeLegacy);
+	let state = snapshot?.state ?? withUpgradeRate(initial(), user);
 	if (
 		!state.battle ||
 		(state.player &&
@@ -386,8 +466,9 @@ export async function loadGame(user: User) {
 			(state.player.healedAt == null ||
 				(state.player.hp < state.player.maxHp && Date.now() - state.player.healedAt >= 60000)))
 	) {
-		await mutateCombat(user, () => emptyReward());
-		state = await getState(user);
+		await mutateCombat(user, () => emptyReward(), snapshot);
+		snapshot = await readGameState(user, includeLegacy);
+		state = snapshot?.state ?? withUpgradeRate(initial(), user);
 	}
 	const expedition = state.expedition;
 	const index =
@@ -422,12 +503,39 @@ export async function loadGame(user: User) {
 					},
 		question:
 			word == null || expedition?.cleared ? null : { prompt: word.prompt, template: word.template },
-		remaining: await getRemainingNewVocaCount(user._id, new Date()),
 		serverNow: Date.now()
 	};
 }
 
+export async function loadGameView(user: User) {
+	const game = await loadGame(user, false);
+	return {
+		revision: game.revision,
+		player: game.player,
+		serverNow: game.serverNow,
+		battle: game.battle,
+		gold: game.gold,
+		iron: game.iron,
+		stones: game.stones,
+		silver: game.silver,
+		hitGold: game.hitGold,
+		incomeUpgrades: game.incomeUpgrades,
+		weapon: game.weapon,
+		attack: game.attack,
+		criticalChance: game.criticalChance,
+		successRate: game.successRate,
+		baseSuccessRate: game.baseSuccessRate,
+		attackUpgrades: game.attackUpgrades,
+		criticalUpgrades: game.criticalUpgrades
+	};
+}
+
 export async function actGame(user: User, form: FormData) {
+	if (form.get('action') === 'upgrade') {
+		const snapshot = await readGameState(user);
+		const state = snapshot?.state ?? withUpgradeRate(initial(), user);
+		return actGameLocked(user, form, state, snapshot?.original);
+	}
 	await Game.updateOne(
 		{ _id: user._id },
 		{ $setOnInsert: { state: initial(), lockUntil: 0 } },
@@ -445,14 +553,14 @@ export async function actGame(user: User, form: FormData) {
 	if (locked.modifiedCount !== 1)
 		error(409, '다른 요청이 진행 중이거나 진행 상황이 바뀌었어요. 새로고침 후 다시 시도해 주세요.');
 	try {
-		return await actGameLocked(user, form);
+		const state = (await readGameState(user, true))?.state ?? withUpgradeRate(initial(), user);
+		return await actGameLocked(user, form, state);
 	} finally {
 		await Game.updateOne({ _id: user._id, lockUntil }, { $set: { lockUntil: 0 } });
 	}
 }
 
-async function actGameLocked(user: User, form: FormData) {
-	const state = await getState(user);
+async function actGameLocked(user: User, form: FormData, state: GameState, original?: GameState) {
 	const revision = Number(form.get('revision'));
 	if (revision !== state.revision)
 		error(409, '진행 상황이 바뀌었어요. 새로고침 후 다시 시도해 주세요.');
@@ -487,7 +595,6 @@ async function actGameLocked(user: User, form: FormData) {
 		]);
 		const candidates = await findNewQuizCandidates({
 			currentLevel: user.currentLevel,
-			evidenceCount: 0,
 			excludedVocaIds: [...reviewed, ...pending, ...excluded],
 			limit: 40,
 			targetLang: 'en'
@@ -646,8 +753,12 @@ async function actGameLocked(user: User, form: FormData) {
 	} else error(400, '알 수 없는 행동이에요.');
 	state.revision += 1;
 	const result = await Game.updateOne(
-		{ _id: user._id, 'state.revision': revision },
-		{ $set: { state } }
+		{
+			_id: user._id,
+			'state.revision': revision,
+			...(action === 'upgrade' ? { lockUntil: { $lte: Date.now() } } : {})
+		},
+		{ $set: original ? changedGameFields(original, state) : { state } }
 	);
 	if (result.modifiedCount !== 1)
 		error(409, '다른 창에서 진행 상황이 바뀌었어요. 새로고침해 주세요.');
@@ -681,5 +792,24 @@ async function actGameLocked(user: User, form: FormData) {
 					? 'dungeon'
 					: null
 	};
-	return { message, effect };
+	const game =
+		action === 'upgrade'
+			? {
+					revision: state.revision,
+					gold: state.gold,
+					iron: state.iron,
+					stones: state.stones,
+					silver: state.silver,
+					hitGold: state.hitGold,
+					incomeUpgrades: state.incomeUpgrades,
+					weapon: state.weapon,
+					attack: state.attack,
+					criticalChance: state.criticalChance,
+					successRate: state.successRate,
+					baseSuccessRate: state.baseSuccessRate,
+					attackUpgrades: state.attackUpgrades,
+					criticalUpgrades: state.criticalUpgrades
+				}
+			: undefined;
+	return { message, effect, game };
 }

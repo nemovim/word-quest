@@ -5,6 +5,7 @@ const {
 	distinctMock,
 	findMock,
 	findOneMock,
+	existsMock,
 	findOneAndUpdateMock,
 	updateOneMock,
 	updateManyMock,
@@ -19,6 +20,7 @@ const {
 	distinctMock: vi.fn(),
 	findMock: vi.fn(),
 	findOneMock: vi.fn(),
+	existsMock: vi.fn(),
 	findOneAndUpdateMock: vi.fn(),
 	updateOneMock: vi.fn(),
 	updateManyMock: vi.fn(),
@@ -40,6 +42,7 @@ vi.mock('$lib/models/quiz-report.model', () => ({
 		distinct: distinctMock,
 		find: findMock,
 		findOne: findOneMock,
+		exists: existsMock,
 		findOneAndUpdate: findOneAndUpdateMock,
 		updateOne: updateOneMock,
 		updateMany: updateManyMock
@@ -66,6 +69,7 @@ import {
 	createQuizReport,
 	findPendingQuizReports,
 	findPendingReportedVocaIds,
+	hasPendingReportForVoca,
 	resolveQuizReport
 } from '$lib/repositories/quiz-report.repository';
 import { buildQuizReportVocaSnapshot } from '$lib/service/quiz-report-ai.service';
@@ -97,6 +101,13 @@ describe('quiz-report.repository', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		transactionMock.mockImplementation(async (callback) => callback('session'));
+	});
+
+	it('checks only the requested word for an unresolved report', async () => {
+		existsMock.mockResolvedValueOnce({ _id: 'report-1' }).mockResolvedValueOnce(null);
+		expect(await hasPendingReportForVoca('voca-1')).toBe(true);
+		expect(existsMock).toHaveBeenCalledWith({ vocaId: 'voca-1', ...unresolved });
+		expect(await hasPendingReportForVoca('voca-2')).toBe(false);
 	});
 
 	it('creates every submission as its own report', async () => {

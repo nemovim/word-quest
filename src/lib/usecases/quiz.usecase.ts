@@ -10,10 +10,12 @@ import {
 	findQuizCardByVocaId,
 	findQuizCardsByVocaIds
 } from '$lib/repositories/quiz-card.repository';
-import { findPendingReportedVocaIds } from '$lib/repositories/quiz-report.repository';
+import {
+	findPendingReportedVocaIds,
+	hasPendingReportForVoca
+} from '$lib/repositories/quiz-report.repository';
 import {
 	countAnsweredReviewsByVoca,
-	countDistinctAnsweredVocasByUser,
 	findDueReviewGroupsByUser,
 	findRecentDistinctAnsweredReviews,
 	findReviewByUserAndVoca,
@@ -23,6 +25,7 @@ import {
 import {
 	findPermanentlyExcludedVocaIds,
 	findVocaByIds,
+	findVocaDifficultiesByIds,
 	getVocaById,
 	updateVocaDifficultyIfCurrent
 } from '$lib/repositories/voca.repository';
@@ -103,7 +106,6 @@ type QuizJudgePrompt = Pick<
 >;
 
 const DIFFICULTY_UPDATE_RETRY_LIMIT = 3;
-const QUIZ_LEVEL_EVIDENCE_LIMIT = 500;
 
 function parseLanguageCode(value: string | undefined): LanguageCode {
 	if (value == null || !Object.values(LANGUAGE_CODES).includes(value as LanguageCode)) {
@@ -274,15 +276,15 @@ function buildSolvedFeedback(
 async function refreshUserLevel(currentUser: User, now: Date): Promise<User> {
 	const levelReviews = await findRecentDistinctAnsweredReviews(currentUser._id, 500);
 	const levelVocaIds = levelReviews.map((currentReview) => currentReview.vocaId);
-	const levelVocas = levelVocaIds.length === 0 ? [] : await findVocaByIds(levelVocaIds);
+	const levelVocas = levelVocaIds.length === 0 ? [] : await findVocaDifficultiesByIds(levelVocaIds);
 	const nextUser = rebuildUserLevel(currentUser, levelReviews, levelVocas, now);
 
 	return nextUser === currentUser ? currentUser : await saveUser(nextUser);
 }
 
-async function loadQuizTargetContext(request: QuizTarget) {
+async function loadQuizTargetContext(request: QuizTarget, loadedVoca?: Voca) {
 	const [currentVoca, currentQuizCard] = await Promise.all([
-		getVocaById(request.vocaId),
+		loadedVoca ?? getVocaById(request.vocaId),
 		findQuizCardByVocaId(request.vocaId)
 	]);
 
@@ -409,13 +411,10 @@ export async function loadQuizPage(
 	const now = new Date();
 	const directionField =
 		directionMode === QUIZ_DIRECTION_MODES.TARGET_TO_KO ? 'answerLang' : 'promptLang';
-	const [levelEvidenceCount, reviewedVocaIds, pendingReportedVocaIds, permanentlyExcludedVocaIds] =
-		await Promise.all([
-			countDistinctAnsweredVocasByUser(currentUser._id, QUIZ_LEVEL_EVIDENCE_LIMIT),
-			findReviewedVocaIdsByUserDirection(currentUser._id, directionField, KOREAN_LANGUAGE_CODE),
-			findPendingReportedVocaIds(),
-			findPermanentlyExcludedVocaIds()
-		]);
+	const [pendingReportedVocaIds, permanentlyExcludedVocaIds] = await Promise.all([
+		findPendingReportedVocaIds(),
+		findPermanentlyExcludedVocaIds()
+	]);
 	const unavailableVocaIds = [...pendingReportedVocaIds, ...permanentlyExcludedVocaIds];
 	const dueReviewGroups = await findDueReviewGroupsByUser(
 		currentUser._id,
@@ -429,24 +428,15 @@ export async function loadQuizPage(
 	const queuedNew = dueReviewGroups.new.slice(0, DEFAULT_QUIZ_SESSION_SIZE - reviewed.length);
 	const availableReviews = [...reviewed, ...queuedNew];
 	const dueVocaIds = Array.from(new Set(availableReviews.map((reviewItem) => reviewItem.vocaId)));
-	const excludedVocaIds = Array.from(new Set([...reviewedVocaIds, ...unavailableVocaIds]));
-	const [dueQuizCards, dueVocas, candidates] = await Promise.all([
+	const [dueQuizCards, dueVocas, reviewedVocaIds] = await Promise.all([
 		dueVocaIds.length === 0 ? [] : findQuizCardsByVocaIds(dueVocaIds),
 		dueVocaIds.length === 0 ? [] : findVocaByIds(dueVocaIds),
-		findNewQuizCandidates({
-			currentLevel: currentUser.currentLevel,
-			evidenceCount: levelEvidenceCount,
-			excludedVocaIds,
-			limit: DEFAULT_QUIZ_SESSION_SIZE - availableReviews.length
-		})
+		availableReviews.length < DEFAULT_QUIZ_SESSION_SIZE
+			? findReviewedVocaIdsByUserDirection(currentUser._id, directionField, KOREAN_LANGUAGE_CODE)
+			: null
 	]);
 	const quizCardMap = new Map(dueQuizCards.map((quizCard) => [quizCard.vocaId, quizCard]));
 	const vocaMap = new Map(dueVocas.map((voca) => [voca._id, voca]));
-
-	for (const candidate of candidates) {
-		quizCardMap.set(candidate.voca._id, candidate.quizCard);
-		vocaMap.set(candidate.voca._id, candidate.voca);
-	}
 
 	const encounters: QuizEncounter[] = [];
 	let lastQuizExampleId: string | undefined;
@@ -478,6 +468,23 @@ export async function loadQuizPage(
 		);
 		encounters.push(encounter);
 		lastQuizExampleId = encounter.quizExampleId;
+	}
+
+	const candidateLimit = DEFAULT_QUIZ_SESSION_SIZE - encounters.length;
+	let candidates: Awaited<ReturnType<typeof findNewQuizCandidates>> = [];
+	if (candidateLimit > 0) {
+		const knownVocaIds =
+			reviewedVocaIds ??
+			(await findReviewedVocaIdsByUserDirection(
+				currentUser._id,
+				directionField,
+				KOREAN_LANGUAGE_CODE
+			));
+		candidates = await findNewQuizCandidates({
+			currentLevel: currentUser.currentLevel,
+			excludedVocaIds: [...new Set([...knownVocaIds, ...unavailableVocaIds])],
+			limit: candidateLimit
+		});
 	}
 
 	for (const candidate of candidates) {
@@ -530,11 +537,7 @@ async function recordQuizResult(
 	correctAnswerText: string,
 	now: Date
 ): Promise<QuizSolvedFeedback> {
-	const unavailableVocaIds = await Promise.all([
-		findPendingReportedVocaIds(),
-		findPermanentlyExcludedVocaIds()
-	]);
-	if (unavailableVocaIds.some((vocaIds) => vocaIds.includes(request.vocaId))) {
+	if ('quizExcludedByReportId' in currentVoca || (await hasPendingReportForVoca(request.vocaId))) {
 		throw new Error('신고 처리 중이거나 퀴즈에서 제외된 단어는 학습 기록에 저장할 수 없습니다.');
 	}
 
@@ -573,17 +576,24 @@ async function recordQuizResult(
 	return buildSolvedFeedback(result, currentEncounter, savedReview, correctAnswerText);
 }
 
-export async function checkQuizAnswer(request: {
-	user: User;
-	vocaId: string;
-	quizExampleId: string;
-	promptLang: LanguageCode;
-	answerLang: LanguageCode;
-	answerText: string;
-	isRetry?: boolean;
-}) {
+export async function checkQuizAnswer(
+	request: {
+		user: User;
+		vocaId: string;
+		quizExampleId: string;
+		promptLang: LanguageCode;
+		answerLang: LanguageCode;
+		answerText: string;
+		isRetry?: boolean;
+		passOnWrong?: boolean;
+	},
+	loadedVoca?: Voca
+) {
 	const now = new Date();
-	const { currentVoca, currentExample, correctAnswerText } = await loadQuizTargetContext(request);
+	const { currentVoca, currentExample, correctAnswerText } = await loadQuizTargetContext(
+		request,
+		loadedVoca
+	);
 	const normalizedAnswerText = normalizeAnswer(request.answerText, request.answerLang);
 	const normalizedTargetText = normalizeAnswer(correctAnswerText, request.answerLang);
 
@@ -596,6 +606,10 @@ export async function checkQuizAnswer(request: {
 			correctAnswerText,
 			now
 		);
+	}
+
+	if (request.passOnWrong) {
+		return recordQuizResult(request, 'pass', currentVoca, currentExample, correctAnswerText, now);
 	}
 
 	if (!request.isRetry) {
@@ -625,16 +639,22 @@ export async function revealQuizAnswer(request: QuizTarget) {
 	};
 }
 
-export async function passQuizAnswer(request: {
-	user: User;
-	isRetry?: boolean;
-	vocaId: string;
-	quizExampleId: string;
-	promptLang: LanguageCode;
-	answerLang: LanguageCode;
-}) {
+export async function passQuizAnswer(
+	request: {
+		user: User;
+		isRetry?: boolean;
+		vocaId: string;
+		quizExampleId: string;
+		promptLang: LanguageCode;
+		answerLang: LanguageCode;
+	},
+	loadedVoca?: Voca
+) {
 	const now = new Date();
-	const { currentVoca, currentExample, correctAnswerText } = await loadQuizTargetContext(request);
+	const { currentVoca, currentExample, correctAnswerText } = await loadQuizTargetContext(
+		request,
+		loadedVoca
+	);
 	return recordQuizResult(request, 'pass', currentVoca, currentExample, correctAnswerText, now);
 }
 

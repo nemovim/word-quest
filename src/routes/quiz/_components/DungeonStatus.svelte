@@ -1,7 +1,12 @@
 <script lang="ts">
 	import { onDestroy, tick } from 'svelte';
 
-	import type { BattleView, CombatUpdate, StudyReward } from '$lib/shared/types/journey.type';
+	import type {
+		BattleView,
+		CombatUpdate,
+		PlayerHealth,
+		StudyReward
+	} from '$lib/shared/types/journey.type';
 
 	import BattleArena from '$lib/components/BattleArena.svelte';
 	import ChestStash from '$lib/components/ChestStash.svelte';
@@ -14,6 +19,8 @@
 		onUpdate
 	}: {
 		game: {
+			revision: number;
+			player?: PlayerHealth;
 			attack: number;
 			criticalChance: number;
 			gold: number;
@@ -29,6 +36,7 @@
 	const battle = $derived(combat?.battle ?? game.battle);
 	const wallet = $derived(combat?.wallet ?? game);
 	const reward = $derived(combat?.reward);
+	const player = $derived(combat?.player ?? game.player);
 	let sound = $state(false);
 	const showSoundOptions = false;
 	let phase = $state<'idle' | 'charging' | 'reveal'>('idle');
@@ -148,20 +156,20 @@
 					</div>
 				{/each}
 			</div>
-			{#if combat?.player}
-				<div class="explorer" class:danger={combat.player.hp <= 25}>
-					<span>{combat.player.hp === 0 ? '탈진 · 회복 중' : '탐험 중'}</span>
-					{#key combat.revision}<div
+			{#if player}
+				<div class="explorer" class:danger={player.hp <= 25}>
+					<span>{player.hp === 0 ? '탈진 · 회복 중' : '탐험 중'}</span>
+					{#key combat?.revision ?? game.revision}<div
 							class="vitality"
 							class:hurt={!!reward?.playerDamage}
 							role="meter"
 							aria-label="내 체력"
 							aria-valuemin={0}
-							aria-valuemax={combat.player.maxHp}
-							aria-valuenow={combat.player.hp}
+							aria-valuemax={player.maxHp}
+							aria-valuenow={player.hp}
 						>
-							<span class="heart" aria-hidden="true">♥</span><b>{combat.player.hp}</b><small
-								>/ {combat.player.maxHp}</small
+							<span class="heart" aria-hidden="true">♥</span><b>{player.hp}</b><small
+								>/ {player.maxHp}</small
 							>
 							{#if reward?.playerDamage}<b class="taken">−{reward.playerDamage}</b>{/if}
 						</div>{/key}

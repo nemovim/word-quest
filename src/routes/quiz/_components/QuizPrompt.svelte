@@ -24,13 +24,14 @@
 		solvedAnswer: string;
 		isSubmitting: boolean;
 		errorMessage: string;
-		onCheck: (answerText: string) => Promise<QuizResult>;
+		onCheck: (answerText: string, passOnWrong: boolean) => Promise<QuizResult>;
 		onPass: () => Promise<void>;
 		onJudge: (answerText: string, regenerate: boolean) => Promise<void>;
 	} = $props();
 
 	let answerText = $state('');
 	let wrongAttemptCount = $state(0);
+	const maxWrongAttempts = 5;
 	const showAiHelp = false;
 	let lastSubmittedAnswer = $state('');
 	let localErrorMessage = $state('');
@@ -96,11 +97,10 @@
 		answerInput?.style.removeProperty('width');
 
 		try {
-			const result = await onCheck(submittedAnswer);
+			const result = await onCheck(submittedAnswer, wrongAttemptCount + 1 >= maxWrongAttempts);
 			if (result.status === 'wrong') {
 				lastSubmittedAnswer = submittedAnswer;
 				wrongAttemptCount += 1;
-				if (wrongAttemptCount >= 5) await onPass();
 			}
 		} catch {
 			// parent callback already set the visible error state
@@ -298,7 +298,7 @@
 				<aside class="wrong-answer" role="status">
 					<p class="submitted"><strong>오답</strong> · 내 답: {lastSubmittedAnswer}</p>
 					{#if wrongAttemptCount >= 3}<small
-							>{5 - wrongAttemptCount}번 더 틀리면 자동으로 넘겨요.</small
+							>{maxWrongAttempts - wrongAttemptCount}번 더 틀리면 자동으로 넘겨요.</small
 						>{/if}
 					{#if wrongResult.spellingDistance != null}<p>
 							정답과 {wrongResult.spellingDistance}글자 차이예요. 철자를 확인해 보세요.

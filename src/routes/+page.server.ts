@@ -2,15 +2,13 @@ import { fail, isHttpError } from '@sveltejs/kit';
 
 import type { Actions, PageServerLoad } from './$types';
 
-import { actGame, loadGame } from '$lib/server/game';
+import { actGame, loadGameView } from '$lib/server/game';
 import { loadSummary } from '$lib/usecases/dashboard.usecase';
 
-
-export const load: PageServerLoad = async ({ locals }) => ({
-	user: locals.user,
-	game: await loadGame(locals.user),
-	summary: await loadSummary(locals.user)
-});
+export const load: PageServerLoad = async ({ locals }) => {
+	const [game, summary] = await Promise.all([loadGameView(locals.user), loadSummary(locals.user)]);
+	return { user: locals.user, game, summary };
+};
 export const actions: Actions = {
 	default: async ({ locals, request }) => {
 		try {

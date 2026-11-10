@@ -48,6 +48,7 @@ vocaSchema.index({ targetLang: 1, sourceText: 1 });
 vocaSchema.index({ targetLang: 1, normalizedTargetText: 1 });
 vocaSchema.index({ targetLang: 1, sourceText: 1, normalizedTargetText: 1 });
 vocaSchema.index({ difficultyLevel: 1, utilityScore: -1 });
+vocaSchema.index({ difficultyLevel: 1, utilityScore: -1, originKey: 1 });
 vocaSchema.index({ targetLang: 1, utilityScore: 1, originKey: 1 });
 vocaSchema.index({ utilityScore: 1, scoreReviewCount: 1, originKey: 1 });
 vocaSchema.index({ scoreEvaluatedAt: 1, originKey: 1 });

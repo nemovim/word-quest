@@ -10,7 +10,6 @@ vi.mock('$lib/models/review.model', () => ({
 }));
 
 import {
-	countDistinctAnsweredVocasByUser,
 	countVocasFirstReviewedSince,
 	findDueReviewGroupsByUser,
 	findRecentDistinctAnsweredReviews,
@@ -155,23 +154,6 @@ describe('review.repository', () => {
 		expect(pipeline[1].$group._id).toBe('$vocaId');
 		expect(pipeline[2].$group.todayStudiedCount).toEqual({ $sum: '$todayStudied' });
 	});
-	it('counts distinct answered vocas up to the requested evidence limit', async () => {
-		aggregateMock.mockResolvedValue([{ count: 37 }]);
-
-		await expect(countDistinctAnsweredVocasByUser('user-1', 500)).resolves.toBe(37);
-		expect(aggregateMock).toHaveBeenCalledWith([
-			{
-				$match: {
-					userId: 'user-1',
-					$or: [{ correctCount: { $gt: 0 } }, { wrongCount: { $gt: 0 } }]
-				}
-			},
-			{ $group: { _id: '$vocaId' } },
-			{ $limit: 500 },
-			{ $count: 'count' }
-		]);
-	});
-
 	it('loads reviewed voca ids for one quiz direction', async () => {
 		distinctMock.mockResolvedValue(['voca-1', 'voca-2']);
 

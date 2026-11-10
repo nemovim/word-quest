@@ -36,6 +36,10 @@ export async function findPendingReportedVocaIds(): Promise<string[]> {
 	return QuizReportModel.distinct('vocaId', UNRESOLVED);
 }
 
+export async function hasPendingReportForVoca(vocaId: string): Promise<boolean> {
+	return (await QuizReportModel.exists({ vocaId, ...UNRESOLVED })) != null;
+}
+
 export async function findPendingQuizReports(limit: number): Promise<QuizReportEntity[]> {
 	const documents = await QuizReportModel.find(UNRESOLVED)
 		.sort({ createdAt: 1 })

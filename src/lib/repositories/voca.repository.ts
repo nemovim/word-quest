@@ -127,6 +127,15 @@ export async function findVocaByIds(vocaIds: string[]): Promise<VocaEntity[]> {
 	return documents.map(toPojo<VocaEntity>);
 }
 
+export async function findVocaDifficultiesByIds(
+	vocaIds: string[]
+): Promise<Pick<VocaEntity, '_id' | 'difficultyLevel'>[]> {
+	const documents = await VocaModel.find({ _id: { $in: vocaIds } })
+		.select({ _id: 1, difficultyLevel: 1 })
+		.lean();
+	return documents.map(toPojo<Pick<VocaEntity, '_id' | 'difficultyLevel'>>);
+}
+
 export async function findPermanentlyExcludedVocaIds(): Promise<string[]> {
 	const vocaIds = await VocaModel.distinct('_id', {
 		quizExcludedByReportId: { $exists: true }

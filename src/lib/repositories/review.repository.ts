@@ -79,25 +79,6 @@ export async function findRecentDistinctAnsweredReviews(
 	return documents.map(toPojo<LevelReview>);
 }
 
-export async function countDistinctAnsweredVocasByUser(
-	userId: string,
-	limit: number
-): Promise<number> {
-	const [result] = await ReviewModel.aggregate([
-		{
-			$match: {
-				userId,
-				$or: [{ correctCount: { $gt: 0 } }, { wrongCount: { $gt: 0 } }]
-			}
-		},
-		{ $group: { _id: '$vocaId' } },
-		{ $limit: limit },
-		{ $count: 'count' }
-	]);
-
-	return result?.count ?? 0;
-}
-
 export async function findReviewedVocaIdsByUserDirection(
 	userId: string,
 	directionField: 'promptLang' | 'answerLang',

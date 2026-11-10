@@ -21,6 +21,8 @@
 	}: {
 		pageData: QuizPageData;
 		game: {
+			revision: number;
+			serverNow: number;
 			player?: PlayerHealth;
 			attack: number;
 			criticalChance: number;
@@ -35,18 +37,19 @@
 	let combat = $state<CombatUpdate | null>(null);
 
 	function applyCombat(value: CombatUpdate) {
-		if (!combat || value.revision >= combat.revision) combat = value;
+		if (value.revision >= (combat?.revision ?? game.revision)) combat = value;
 	}
 
 	let remainingQueue = $state<QuizEncounter[]>([]);
 	let loading = $state(true);
 	let now = $state(Date.now());
+	let serverClockOffset = 0;
 	const player = $derived(combat?.player ?? game.player);
 	const exhausted = $derived(player?.hp === 0);
 	const recoverySeconds = $derived(Math.max(0, Math.ceil(((player?.recoverAt ?? 0) - now) / 1000)));
 	let pollTimer: ReturnType<typeof setTimeout> | undefined;
 	let alive = true;
-	let turnId = '';
+	let turnId = $state('');
 	let currentEncounter = $state<QuizEncounter | null>(null);
 	let result = $state<QuizResult | null>(null);
 	const answerParts = $derived(
@@ -66,12 +69,19 @@
 	);
 
 	onMount(() => {
-		const clock = setInterval(() => (now = Date.now()), 1000);
+		serverClockOffset = game.serverNow - Date.now();
+		now = Date.now() + serverClockOffset;
 		void (async () => {
 			try {
-				const started = await postQuiz<CombatUpdate>('/api/quiz/batch', { start: true });
-				if (!alive) return;
-				applyCombat(started);
+				if (!player || player.hp <= 0) {
+					if (player?.recoverAt && player.recoverAt > now) {
+						loading = false;
+						return;
+					}
+					const started = await postQuiz<CombatUpdate>('/api/quiz/batch', { start: true });
+					if (!alive) return;
+					applyCombat(started);
+				}
 				remainingQueue = [...pageData.encounters];
 				await moveToNextEncounter();
 			} catch (error) {
@@ -80,7 +90,6 @@
 				loading = false;
 			}
 		})();
-		return () => clearInterval(clock);
 	});
 	onDestroy(() => {
 		alive = false;
@@ -88,32 +97,46 @@
 	});
 	onMount(() => {
 		let refreshing = false;
+		let lastRefreshAt = 0;
 		const timer = setInterval(async () => {
-			if (refreshing || isSubmitting || loading || !combat?.player || combat.player.hp <= 0) return;
+			now = Date.now() + serverClockOffset;
+			const currentPlayer = player;
+			if (
+				refreshing ||
+				isSubmitting ||
+				loading ||
+				document.hidden ||
+				!currentPlayer ||
+				currentPlayer.hp <= 0 ||
+				currentPlayer.hp >= currentPlayer.maxHp ||
+				(currentPlayer.healedAt != null && now - currentPlayer.healedAt < 60000) ||
+				now - lastRefreshAt < 15000
+			)
+				return;
 			refreshing = true;
+			lastRefreshAt = now;
 			try {
 				const updated = await postQuiz<CombatUpdate>('/api/quiz/batch', {
 					health: true,
-					sessionId: combat.player.id
+					sessionId: currentPlayer.id
 				});
-				if (alive && updated.player?.hp !== combat?.player?.hp) applyCombat(updated);
+				if (alive) applyCombat(updated);
 			} catch {
 				// The next combat request also applies elapsed recovery time.
 			} finally {
 				refreshing = false;
 			}
-		}, 15000);
+		}, 1000);
 		return () => clearInterval(timer);
 	});
 	async function loadMore() {
-		if (loading || combat?.player?.hp === 0) return;
+		if (loading || player?.hp === 0) return;
 		loading = true;
 		clearTimeout(pollTimer);
 		try {
-			if (!combat?.player)
-				applyCombat(await postQuiz<CombatUpdate>('/api/quiz/batch', { start: true }));
+			if (!player) applyCombat(await postQuiz<CombatUpdate>('/api/quiz/batch', { start: true }));
 			const next = await postQuiz<QuizPageData>('/api/quiz/batch', {
-				sessionId: combat?.player?.id,
+				sessionId: player?.id,
 				direction: pageData.directionMode
 			});
 			if (!alive) return;
@@ -137,7 +160,7 @@
 	}
 
 	async function moveToNextEncounter(): Promise<void> {
-		if (combat?.player?.hp === 0) return;
+		if (player?.hp === 0) return;
 		resetTurn();
 		isRetrying = false;
 		turnId = crypto.randomUUID();
@@ -151,7 +174,7 @@
 
 	function getBasePayload(encounter: QuizEncounter) {
 		return {
-			sessionId: combat?.player?.id,
+			sessionId: player?.id,
 			actionId: turnId,
 			vocaId: encounter.vocaId,
 			quizExampleId: encounter.quizExampleId,
@@ -203,8 +226,8 @@
 		}
 	}
 
-	async function checkAnswer(answerText: string): Promise<QuizResult> {
-		if (currentEncounter == null || combat?.player?.hp === 0) {
+	async function checkAnswer(answerText: string, passOnWrong: boolean): Promise<QuizResult> {
+		if (currentEncounter == null || player?.hp === 0) {
 			throw new Error('풀고 있는 문제가 없습니다.');
 		}
 
@@ -216,6 +239,7 @@
 				{
 					...getBasePayload(encounter),
 					answerText,
+					passOnWrong,
 					actionId: crypto.randomUUID(),
 					isRetry: isRetrying
 				}
@@ -228,7 +252,7 @@
 	}
 
 	async function passCurrentCard(): Promise<void> {
-		if (currentEncounter == null || combat?.player?.hp === 0) {
+		if (currentEncounter == null || player?.hp === 0) {
 			return;
 		}
 
@@ -244,7 +268,7 @@
 	}
 
 	async function judgeCurrentAnswer(answerText: string, regenerate: boolean): Promise<void> {
-		if (currentEncounter == null || combat?.player?.hp === 0) {
+		if (currentEncounter == null || player?.hp === 0) {
 			return;
 		}
 
@@ -317,18 +341,20 @@
 	<section class="quiz-page">
 		<QuizHeader encounter={currentEncounter} />
 
-		<QuizPrompt
-			encounter={currentEncounter}
-			{wrongResult}
-			isSolved={solvedResult != null}
-			solvedAnswer={solvedResult?.correctAnswer ?? ''}
-			{isSubmitting}
-			{errorMessage}
-			onCheck={checkAnswer}
-			onPass={passCurrentCard}
-			onJudge={judgeCurrentAnswer}
-			onReport={reportCurrentEncounter}
-		/>
+		{#key turnId}
+			<QuizPrompt
+				encounter={currentEncounter}
+				{wrongResult}
+				isSolved={solvedResult != null}
+				solvedAnswer={solvedResult?.correctAnswer ?? ''}
+				{isSubmitting}
+				{errorMessage}
+				onCheck={checkAnswer}
+				onPass={passCurrentCard}
+				onJudge={judgeCurrentAnswer}
+				onReport={reportCurrentEncounter}
+			/>
+		{/key}
 
 		{#if solvedResult != null}
 			<QuizSolvedPanel {solvedResult} onNext={moveToNextEncounter} />
