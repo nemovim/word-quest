@@ -157,7 +157,7 @@ export async function rewardStudy(
 					switch (battle.kind ?? 'slime') {
 						case 'slime':
 							{
-								const bonusGold = 5 + randomInt(6);
+								const bonusGold = (5 + randomInt(6)) * 2;
 								reward.gold += bonusGold;
 								state.gold += bonusGold;
 							}

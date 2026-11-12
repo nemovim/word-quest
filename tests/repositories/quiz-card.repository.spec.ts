@@ -52,15 +52,19 @@ describe('quiz-card.repository', () => {
 		expect(calculateQuizDifficultyWindow(5.9)).toEqual({ lower: 4, upper: 6, spread: 2 });
 	});
 
-	it('allocates 30% easier, 50% current, and 20% harder vocas', () => {
+	it('allocates 20% easier, 40% current, and 40% harder vocas', () => {
 		expect(calculateQuizDifficultyQuotas(5.9, 10)).toEqual([
-			{ difficultyLevel: 4, count: 3 },
-			{ difficultyLevel: 5, count: 5 },
-			{ difficultyLevel: 6, count: 2 }
+			{ difficultyLevel: 4, count: 2 },
+			{ difficultyLevel: 5, count: 4 },
+			{ difficultyLevel: 6, count: 4 }
 		]);
 		expect(calculateQuizDifficultyQuotas(1, 10)).toEqual([
-			{ difficultyLevel: 1, count: 8 },
-			{ difficultyLevel: 2, count: 2 }
+			{ difficultyLevel: 1, count: 6 },
+			{ difficultyLevel: 2, count: 4 }
+		]);
+		expect(calculateQuizDifficultyQuotas(10, 10)).toEqual([
+			{ difficultyLevel: 9, count: 2 },
+			{ difficultyLevel: 10, count: 8 }
 		]);
 	});
 

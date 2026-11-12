@@ -67,13 +67,12 @@ export function getUpdatedExampleScore(currentScore: number | undefined, isPass:
 export function applyCorrectToReview(
 	currentReview: Review,
 	quizExampleId: string,
-	now: Date,
-	options: { isRetry?: boolean } = {}
+	now: Date
 ): Review {
-	const nextStage =
-		options.isRetry === true
-			? normalizeReviewStage(currentReview.reviewStage)
-			: getNextCorrectStage(currentReview.reviewStage, isFirstReviewResult(currentReview));
+	const nextStage = getNextCorrectStage(
+		currentReview.reviewStage,
+		isFirstReviewResult(currentReview)
+	);
 	const nextExampleScoreById = { ...currentReview.exampleScoreById };
 	nextExampleScoreById[quizExampleId] = getUpdatedExampleScore(
 		nextExampleScoreById[quizExampleId],

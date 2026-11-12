@@ -479,7 +479,7 @@ describe('persistent monster and treasure chests', () => {
 		stored.state.battle.hp = 1;
 		stored.state.battle.kind = 'slime';
 		const slime = await rewardStudy(user, 'slime-kill');
-		expect(slime.reward).toMatchObject({ clear: 'dungeon', gold: 11, chest: false });
+		expect(slime.reward).toMatchObject({ clear: 'dungeon', gold: 21, chest: false });
 		expect(slime.battle.chests).toHaveLength(0);
 
 		stored.state.battle.hp = 1;
@@ -550,7 +550,7 @@ describe('persistent monster and treasure chests', () => {
 			if (i === 9) roll.mockReturnValueOnce(5).mockReturnValueOnce(0).mockReturnValueOnce(99);
 			await rewardStudy(user, String(i));
 		}
-		expect(stored.state.gold).toBe(22);
+		expect(stored.state.gold).toBe(32);
 		const view = await loadGame(user);
 		expect(view.battle).toMatchObject({ hp: 80, kills: 1 });
 		expect(view.battle.chests).toHaveLength(1);
@@ -559,7 +559,7 @@ describe('persistent monster and treasure chests', () => {
 		const id = view.battle.chests[0].id;
 		const opened = await openChest(user, id);
 		expect(opened.reward).toMatchObject({ gold: 65, iron: 13, stones: 1 });
-		expect(opened.wallet).toMatchObject({ gold: 87, iron: 13, stones: 1 });
+		expect(opened.wallet).toMatchObject({ gold: 97, iron: 13, stones: 1 });
 		expect(opened.battle.chests).toHaveLength(0);
 		const calls = roll.mock.calls.length;
 		expect((await openChest(user, id)).wallet).toEqual(opened.wallet);
@@ -618,7 +618,7 @@ describe('persistent monster and treasure chests', () => {
 			openChest(user, hit.battle.chests[0].id),
 			openChest(user, hit.battle.chests[0].id)
 		]);
-		expect(stored.state.gold).toBe(78);
+		expect(stored.state.gold).toBe(88);
 		expect(stored.state.iron).toBe(13);
 	});
 	it('does not mutate combat while an upgrade holds the save lock', async () => {

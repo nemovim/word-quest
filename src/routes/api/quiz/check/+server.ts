@@ -8,7 +8,7 @@ import { getUserById } from '$lib/repositories/user.repository';
 import { getVocaById } from '$lib/repositories/voca.repository';
 import { healMonster, hurtPlayer, readExploration, rewardStudy } from '$lib/server/game';
 import { NewVocaLimitError } from '$lib/service/new-voca-limit.service';
-import { checkQuizAnswer, revealQuizAnswer } from '$lib/usecases/quiz.usecase';
+import { checkQuizAnswer, passQuizAnswer } from '$lib/usecases/quiz.usecase';
 
 export const POST: RequestHandler = async ({ locals, request }) => {
 	try {
@@ -42,8 +42,10 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 							exploration
 						);
 		const answer =
-			result.status === 'wrong' && combat.player?.hp === 0 ? await revealQuizAnswer(payload) : {};
-		return json({ ...result, ...answer, combat });
+			result.status === 'wrong' && combat.player?.hp === 0
+				? await passQuizAnswer({ ...payload, user: locals.user }, word)
+				: {};
+		return json({ ...result, ...answer, status: result.status, combat });
 	} catch (error) {
 		if (error instanceof NewVocaLimitError) {
 			return new Response(error.message, { status: 429 });

@@ -42,8 +42,8 @@ export function calculateQuizDifficultyQuotas(
 	if (limit <= 0) return [];
 
 	const baseDifficulty = Math.trunc(clampNumber(currentLevel, MIN_LEVEL, MAX_LEVEL));
-	const easyCount = Math.round(limit * 0.3);
-	const currentCount = Math.round(limit * 0.5);
+	const easyCount = Math.round(limit * 0.2);
+	const currentCount = Math.round(limit * 0.4);
 	const harderCount = Math.max(0, limit - easyCount - currentCount);
 	const countsByDifficulty = new Map<number, number>();
 	const addCount = (difficultyLevel: number, count: number) => {

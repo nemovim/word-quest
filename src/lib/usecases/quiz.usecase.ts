@@ -548,23 +548,10 @@ async function recordQuizResult(
 	);
 	const isFirstResult = isFirstReviewResult(currentReview);
 
-	if (result === 'pass' && request.isRetry) {
-		return buildSolvedFeedback(
-			result,
-			currentEncounter,
-			currentReview as Review,
-			correctAnswerText
-		);
-	}
-
 	const nextReview =
 		result === 'pass'
 			? applyPassToReview(currentReview as Review, currentExample._id, now)
-			: request.isRetry === true
-				? applyCorrectToReview(currentReview as Review, currentExample._id, now, {
-						isRetry: true
-					})
-				: applyCorrectToReview(currentReview as Review, currentExample._id, now);
+			: applyCorrectToReview(currentReview as Review, currentExample._id, now);
 	const savedReview = await upsertReview(toReviewCreate(nextReview));
 
 	if (isFirstResult) {
@@ -612,9 +599,6 @@ export async function checkQuizAnswer(
 		return recordQuizResult(request, 'pass', currentVoca, currentExample, correctAnswerText, now);
 	}
 
-	if (!request.isRetry) {
-		await recordQuizResult(request, 'pass', currentVoca, currentExample, correctAnswerText, now);
-	}
 	const currentMemo = await findCachedJudge(
 		currentExample._id,
 		request.promptLang,

@@ -73,30 +73,6 @@ describe('review.util', () => {
 		expect(nextReview.exampleScoreById['example-1']).toBe(1);
 	});
 
-	it('keeps a positive current stage for a corrected retry', () => {
-		const now = new Date('2026-06-21T10:00:00.000Z');
-		const nextReview = applyCorrectToReview(makeReview({ reviewStage: 5 }), 'example-1', now, {
-			isRetry: true
-		});
-
-		expect(nextReview.reviewStage).toBe(5);
-		expect(nextReview.dueAt).toBe('2026-07-12T10:00:00.000Z');
-		expect(nextReview.correctCount).toBe(4);
-	});
-
-	it('keeps a corrected wrong answer scheduled in one minute', () => {
-		const now = new Date('2026-06-21T10:00:00.000Z');
-		const nextReview = applyCorrectToReview(
-			makeReview({ reviewStage: 0, correctCount: 2, wrongCount: 2 }),
-			'example-1',
-			now,
-			{ isRetry: true }
-		);
-
-		expect(nextReview.reviewStage).toBe(0);
-		expect(nextReview.dueAt).toBe('2026-06-21T10:01:00.000Z');
-	});
-
 	it('keeps the maximum stage and schedules another yearly review after a correct result', () => {
 		const now = new Date('2026-06-21T10:00:00.000Z');
 		const nextReview = applyCorrectToReview(makeReview({ reviewStage: 7 }), 'example-1', now);

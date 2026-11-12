@@ -106,7 +106,7 @@ describe('quiz.usecase', () => {
 		expect(VocaRepository.updateVocaDifficultyIfCurrent).toHaveBeenCalledWith('voca-1', 3, 2.93);
 	});
 
-	it('records a wrong answer for review and retains cached feedback', async () => {
+	it('returns feedback without recording an intermediate wrong answer', async () => {
 		const cachedMemo = makeAnswerMemo();
 		vi.spyOn(AnswerMemoService, 'findCachedJudge').mockResolvedValue(cachedMemo);
 		const upsertReviewSpy = vi.spyOn(ReviewRepository, 'upsertReview');
@@ -127,11 +127,11 @@ describe('quiz.usecase', () => {
 			canJudge: true,
 			canRegenerate: false
 		});
-		expect(upsertReviewSpy).toHaveBeenCalled();
+		expect(upsertReviewSpy).not.toHaveBeenCalled();
 		expect(judgeAnswerSpy).not.toHaveBeenCalled();
 	});
 
-	it('returns pass feedback on the final wrong attempt without recording another miss', async () => {
+	it('records the final wrong attempt as a pass', async () => {
 		const result = await checkQuizAnswer({
 			...baseRequest,
 			answerText: 'pear',
@@ -140,7 +140,9 @@ describe('quiz.usecase', () => {
 		});
 
 		expect(result).toMatchObject({ status: 'pass', correctAnswer: 'apple' });
-		expect(ReviewRepository.upsertReview).not.toHaveBeenCalled();
+		expect(ReviewRepository.upsertReview).toHaveBeenCalledWith(
+			expect.objectContaining({ reviewStage: 0, wrongCount: 1 })
+		);
 	});
 
 	it('accepts a correct answer on the final attempt', async () => {
@@ -474,60 +476,33 @@ describe('quiz.usecase', () => {
 			'example-1',
 			expect.any(Date)
 		);
-		expect(ReviewRepository.upsertReview).toHaveBeenCalledTimes(2);
+		expect(ReviewRepository.upsertReview).toHaveBeenCalledTimes(1);
 	});
 
-	it('keeps a positive stage when an existing review is corrected on retry', async () => {
+	it('advances an existing review when corrected on retry', async () => {
 		const currentReview = makeReview({ reviewStage: 5, correctCount: 2, wrongCount: 1 });
 		vi.spyOn(ReviewRepository, 'findReviewByUserAndVoca').mockResolvedValue(currentReview);
-		const applyCorrectSpy = vi.spyOn(ReviewUtil, 'applyCorrectToReview');
-
-		const result = await checkQuizAnswer({
-			...baseRequest,
-			answerText: 'apple',
-			isRetry: true
-		});
-
-		expect(result).toMatchObject({ status: 'correct', reviewStage: 5 });
-		expect(applyCorrectSpy).toHaveBeenCalledWith(currentReview, 'example-1', expect.any(Date), {
-			isRetry: true
-		});
-	});
-
-	it('keeps stage-zero retry at one minute', async () => {
-		const currentReview = makeReview({ reviewStage: 0, correctCount: 2, wrongCount: 2 });
-		vi.spyOn(ReviewRepository, 'findReviewByUserAndVoca').mockResolvedValue(currentReview);
-
-		const result = await checkQuizAnswer({
-			...baseRequest,
-			answerText: 'apple',
-			isRetry: true
-		});
-
-		expect(result).toMatchObject({ status: 'correct', reviewStage: 0 });
+		const result = await checkQuizAnswer({ ...baseRequest, answerText: 'apple', isRetry: true });
+		expect(result).toMatchObject({ status: 'correct', reviewStage: 6 });
 		expect(ReviewRepository.upsertReview).toHaveBeenCalledWith(
-			expect.objectContaining({ reviewStage: 0, correctCount: 3, wrongCount: 2 })
+			expect.objectContaining({ reviewStage: 6, correctCount: 3, wrongCount: 1 })
 		);
 	});
 
-	it('keeps a corrected new word due in one minute', async () => {
-		const failedNewReview = makeReview({
-			reviewStage: 0,
-			correctCount: 0,
-			wrongCount: 1,
-			exampleScoreById: { 'example-1': 2 }
-		});
-		vi.spyOn(ReviewRepository, 'findReviewByUserAndVoca').mockResolvedValue(failedNewReview);
-
-		const result = await checkQuizAnswer({
-			...baseRequest,
-			answerText: 'apple',
-			isRetry: true
-		});
-
-		expect(result).toMatchObject({ status: 'correct', reviewStage: 0 });
+	it('advances a new word when corrected on retry', async () => {
+		vi.spyOn(ReviewRepository, 'findReviewByUserAndVoca').mockResolvedValue(null);
+		const result = await checkQuizAnswer({ ...baseRequest, answerText: 'apple', isRetry: true });
+		expect(result).toMatchObject({ status: 'correct', reviewStage: 4 });
 		expect(ReviewRepository.upsertReview).toHaveBeenCalledWith(
-			expect.objectContaining({ reviewStage: 0, correctCount: 1, wrongCount: 1 })
+			expect.objectContaining({ reviewStage: 4, correctCount: 1, wrongCount: 0 })
+		);
+	});
+
+	it('records a manual pass after a wrong attempt', async () => {
+		const result = await passQuizAnswer({ ...baseRequest, isRetry: true });
+		expect(result).toMatchObject({ status: 'pass', reviewStage: 0 });
+		expect(ReviewRepository.upsertReview).toHaveBeenCalledWith(
+			expect.objectContaining({ reviewStage: 0, wrongCount: 1 })
 		);
 	});
 
