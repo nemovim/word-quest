@@ -2,7 +2,8 @@ import { fail, isHttpError } from '@sveltejs/kit';
 
 import type { Actions, PageServerLoad } from './$types';
 
-import { actGame, loadGameView } from '$lib/server/game';
+import { loadGameView } from '$lib/server/game';
+import { actGame } from '$lib/server/game-actions';
 import { loadSummary } from '$lib/usecases/dashboard.usecase';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -13,7 +14,7 @@ export const actions: Actions = {
 	default: async ({ locals, request }) => {
 		try {
 			const form = await request.formData();
-			if (form.get('action') !== 'upgrade')
+			if (!['upgrade', 'memory-upgrade', 'rebirth'].includes(String(form.get('action'))))
 				return fail(400, { message: '학습은 던전 학습 메뉴에서 진행해 주세요.' });
 			return await actGame(locals.user, form);
 		} catch (cause) {

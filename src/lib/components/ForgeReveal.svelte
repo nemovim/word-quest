@@ -1,6 +1,12 @@
 <script lang="ts">
+	import Shield from '@lucide/svelte/icons/shield';
+
+	import type { UpgradeKind } from '$lib/shared/utils/game.util';
+
 	let {
 		kind = 'attack',
+		label,
+		isArmor,
 		baseChance = 10,
 		phase,
 		level,
@@ -9,16 +15,12 @@
 		onDismiss
 	}: {
 		baseChance?: number;
-		kind?: 'chance' | 'attack' | 'critical' | 'income';
+		kind?: UpgradeKind;
+		label: string;
+		isArmor: boolean;
 		phase: 'idle' | 'charging' | 'success' | 'failure' | 'error';
 		level: number;
-		outcome: {
-			success: boolean;
-			attack: number;
-			critical: number;
-			chance?: number;
-			income?: number;
-		} | null;
+		outcome: { gain: string } | null;
 		chance: number;
 		onDismiss: () => void;
 	} = $props();
@@ -51,35 +53,31 @@
 				></i>{/each}
 		</div>
 		<div class="sword" aria-hidden="true">
-			<svg viewBox="0 0 100 100" fill="none"
-				><path
-					d="M47 65 42 30 50 9 58 30 53 65Z"
-					fill="#fff9e9"
-					stroke="#a7783c"
-					stroke-width="2"
-				/><path d="M50 15v49" stroke="#e4c891" stroke-width="2" /><path
-					d="m31 62 19-5 19 5-3 8-16-4-16 4Z"
-					fill="#efc36e"
-					stroke="#a7783c"
-					stroke-width="2"
-				/><path d="M45 68h10v18H45z" fill="#9d673b" stroke="#704b30" stroke-width="2" /><path
-					d="m42 87 8-5 8 5-8 7Z"
-					fill="#efc36e"
-					stroke="#a7783c"
-					stroke-width="2"
-				/></svg
-			>
+			{#if isArmor}
+				<Shield class="armor-icon" size="100%" strokeWidth={1.3} />
+			{:else}
+				<svg viewBox="0 0 100 100" fill="none"
+					><path
+						d="M47 65 42 30 50 9 58 30 53 65Z"
+						fill="#fff9e9"
+						stroke="#a7783c"
+						stroke-width="2"
+					/><path d="M50 15v49" stroke="#e4c891" stroke-width="2" /><path
+						d="m31 62 19-5 19 5-3 8-16-4-16 4Z"
+						fill="#efc36e"
+						stroke="#a7783c"
+						stroke-width="2"
+					/><path d="M45 68h10v18H45z" fill="#9d673b" stroke="#704b30" stroke-width="2" /><path
+						d="m42 87 8-5 8 5-8 7Z"
+						fill="#efc36e"
+						stroke="#a7783c"
+						stroke-width="2"
+					/></svg
+				>
+			{/if}
 		</div>
 		<div class="copy" aria-live="polite" aria-atomic="true">
-			<span class="level"
-				>{kind === 'chance'
-					? '성공률 충전'
-					: kind === 'critical'
-						? '치명타 강화'
-						: kind === 'income'
-							? '골드 수입 강화'
-							: '공격력 강화'} · +{level}</span
-			>
+			<span class="level">{label} {kind === 'chance' ? '충전' : '강화'} · +{level}</span>
 			<h2 id="forge-reveal-title">
 				{phase === 'charging'
 					? '힘을 모으고 있어요…'
@@ -93,10 +91,7 @@
 			</h2>
 			{#if phase === 'charging'}<p class="hint">두근두근…</p>
 			{:else if phase === 'success' && outcome}<div class="gains">
-					{#if outcome.attack}<span>⚔ 공격력 <b>+{outcome.attack}</b></span>{/if}
-					{#if outcome.critical}<span>✦ 치명타 <b>+{outcome.critical.toFixed(1)}%p</b></span>{/if}
-					{#if outcome.income}<span>명중 골드 <b>+{outcome.income}</b></span>{/if}
-					{#if outcome.chance}<span>강화 성공률 <b>+{outcome.chance}%p</b></span>{/if}
+					<span>{label} <b>{outcome.gain}</b></span>
 				</div>
 				{#if kind !== 'chance'}<p>다음 강화는 기본 성공률 {baseChance}%부터 시작해요.</p>{/if}
 			{:else if phase === 'failure'}<p>능력치 유지 · 성공 확률 <b>{chance}%</b></p>
@@ -145,6 +140,9 @@
 		height: clamp(140px, 27vh, 260px);
 		z-index: 1;
 		filter: drop-shadow(0 0 18px #e3b36660);
+	}
+	.sword :global(.armor-icon) {
+		color: #9d673b;
 	}
 	svg {
 		width: 100%;

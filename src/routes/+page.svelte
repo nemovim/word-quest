@@ -12,6 +12,12 @@
 	import { pwaInstallPrompt, requestPwaInstall } from '$lib/shared/utils/pwa-install.util';
 
 	let { data, form } = $props();
+	let savedMaxHp = $state<{ value: number; revision: number }>();
+	const maxHp = $derived(
+		savedMaxHp && savedMaxHp.revision > data.game.revision
+			? savedMaxHp.value
+			: data.game.armor.maxHp
+	);
 	let showIosInstallOption = $state(false);
 	let showIosInstallHelp = $state(false);
 	let now = $state(untrack(() => data.game.serverNow));
@@ -73,13 +79,11 @@
 		<div class="adventure-status" aria-label="탐험 현황">
 			<span
 				class="health"
-				aria-label={`체력 ${data.game.player?.hp ?? 100} / ${data.game.player?.maxHp ?? 100}`}
+				aria-label={`체력 ${data.game.player?.hp ?? maxHp} / ${maxHp}`}
 				title="현재 체력 / 최대 체력"
 			>
 				<Heart size={19} fill="currentColor" strokeWidth={1.5} aria-hidden="true" />
-				<strong
-					>{data.game.player?.hp ?? 100}<small> / {data.game.player?.maxHp ?? 100}</small></strong
-				>
+				<strong>{data.game.player?.hp ?? maxHp}<small> / {maxHp}</small></strong>
 			</span>
 			<a
 				href={resolve('/quiz')}
@@ -111,7 +115,12 @@
 
 		<small class="total">누적 {summary.totalReviewCount}개 학습</small>
 	</section>
-	<Forge game={data.game} {form} />
+	<Forge
+		game={data.game}
+		currentLevel={data.user.currentLevel}
+		{form}
+		onMaxHpChange={(value, revision) => (savedMaxHp = { value, revision })}
+	/>
 </div>
 
 <footer>

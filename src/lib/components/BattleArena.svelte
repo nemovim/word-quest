@@ -3,7 +3,8 @@
 
 	import DungeonMonster from './DungeonMonster.svelte';
 
-	import type { BattleView, StudyReward } from '$lib/shared/types/journey.type';
+	import type { BattleView, StudyReward } from '$lib/shared/types/combat.type';
+
 	import { MONSTER_NAMES } from '$lib/shared/utils/game.util';
 	let {
 		battle,
@@ -50,7 +51,7 @@
 	{#key eventId}
 		<div
 			class="impact-stage"
-			class:critical={!!reward?.critical}
+			class:combo={!!reward?.combo}
 			class:hit={!!reward?.damage}
 			class:healing={!!reward?.healing}
 			class:attacking={!!reward?.playerDamage}
@@ -60,14 +61,21 @@
 			</div>
 			{#if reward?.damage}
 				<div class="fx" aria-hidden="true">
-					<i class="cut"></i>{#if reward.critical}<i class="cut cross"></i>{/if}<i class="ring"
+					<i class="cut"></i>{#if reward.combo}<i class="cut cross"></i>{/if}<i class="ring"
 					></i>{#each Array.from({ length: 8 }) as _, i (i)}<i
 							class="spark"
 							style={`--a:${i * 45}deg`}
 						></i>{/each}
 				</div>
+				{#if reward.combo}<div class="combo-burst" aria-hidden="true">
+						<span></span>
+						{#each Array.from({ length: 10 }) as _, i (i)}<i
+								style={`--a:${i * 36}deg;--delay:${(i % 3) * 35}ms`}
+							></i>{/each}
+					</div>{/if}
 				<b class="damage" aria-hidden="true"
-					>{#if reward.critical}<small>CRITICAL</small>{/if}−{reward.damage}</b
+					>{#if reward.combo}<small>{reward.combo}연계 · 추가 피해 +{reward.comboBonus}</small
+						>{/if}−{reward.damage}</b
 				>
 			{:else if reward?.healing}<b class="heal" aria-hidden="true">+{reward.healing}</b>{/if}
 		</div>
@@ -233,6 +241,31 @@
 		background: #d6a34f;
 		animation: sparks 0.5s both;
 	}
+	.combo-burst {
+		position: absolute;
+		inset: 0;
+		z-index: 1;
+		pointer-events: none;
+	}
+	.combo-burst span {
+		position: absolute;
+		inset: 18px;
+		border: 2px solid #ffe39a;
+		border-radius: 50%;
+		box-shadow: 0 0 18px #f4be56;
+		animation: combo-burst 0.65s both;
+	}
+	.combo-burst i {
+		position: absolute;
+		top: 50%;
+		left: 50%;
+		width: 5px;
+		height: 8px;
+		border-radius: 3px;
+		background: #ffe39a;
+		box-shadow: 0 0 8px #f4be56;
+		animation: combo-particles 0.62s var(--delay) both;
+	}
 	.damage,
 	.heal {
 		position: absolute;
@@ -262,18 +295,18 @@
 	.hit .monster {
 		animation: recoil 0.48s both;
 	}
-	.critical .monster {
+	.combo .monster {
 		animation: heavy-recoil 0.6s both;
 	}
-	.critical .damage {
+	.combo .damage {
 		color: #a66c12;
 		font-size: 2rem;
 	}
-	.critical .cut {
+	.combo .cut {
 		height: 13px;
 		box-shadow: 0 0 20px #e9b54f;
 	}
-	.critical .ring {
+	.combo .ring {
 		border-width: 5px;
 	}
 	.hit .monster.defeated {
@@ -440,6 +473,26 @@
 			transform: rotate(var(--a)) translateY(-80px) scale(0.4);
 		}
 	}
+	@keyframes combo-burst {
+		from {
+			opacity: 0.9;
+			transform: scale(0.35);
+		}
+		to {
+			opacity: 0;
+			transform: scale(1.4);
+		}
+	}
+	@keyframes combo-particles {
+		from {
+			opacity: 1;
+			transform: rotate(var(--a)) translateY(-18px) scale(1);
+		}
+		to {
+			opacity: 0;
+			transform: rotate(var(--a)) translateY(-65px) scale(0.3);
+		}
+	}
 	@keyframes damage {
 		0% {
 			opacity: 0;
@@ -491,6 +544,7 @@
 			transition: none !important;
 		}
 		.fx,
+		.combo-burst,
 		.bar-impact {
 			display: none;
 		}
@@ -499,7 +553,7 @@
 			font-size: 1rem;
 			top: 0;
 		}
-		.critical .damage {
+		.combo .damage {
 			font-size: 1.2rem;
 		}
 	}

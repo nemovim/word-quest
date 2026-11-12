@@ -115,7 +115,7 @@
 	>
 		<AddHiddenInputs {context} />
 		<input name="selectedVocaId" type="hidden" value={selectedVocaId} />
-		<button type="submit" class="button secondary" disabled={isSubmitting}>
+		<button type="submit" class="button secondary" disabled={isSubmitting} aria-busy={isSubmitting}>
 			{pendingAction === 'regenerate' ? '다시 만드는 중…' : '다시 만들기'}
 		</button>
 	</form>

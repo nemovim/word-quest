@@ -1,19 +1,13 @@
-export type Journey = {
-	startedAt: number;
-	solved: number;
-	bossHp: number;
-	cleared: boolean;
-	claims: { key: string; at: number }[];
-};
-
 export type StudyReward = {
 	silver?: number;
 	gold: number;
 	iron: number;
 	stones: number;
 	damage: number;
-	critical?: boolean;
+	combo?: number;
+	comboBonus?: number;
 	playerCritical?: boolean;
+	chest?: boolean;
 	clear: 'dungeon' | 'boss' | null;
 };
 
@@ -35,11 +29,20 @@ export type PlayerHealth = {
 	recoverAt?: number;
 	healedAt?: number;
 };
+export type ArmorStats = {
+	maxHp: number;
+	maxHpUpgrades: number;
+	killRecovery: number;
+	killRecoveryUpgrades: number;
+	defense: number;
+	defenseUpgrades: number;
+};
 export type CombatUpdate = {
 	hitGold?: number;
+	comboCount?: number;
 	player?: PlayerHealth;
 	revision: number;
-	reward: StudyReward & { healing?: number; playerDamage?: number };
+	reward: StudyReward & { healing?: number; playerDamage?: number; playerHealing?: number };
 	battle: BattleView;
 	wallet: { gold: number; iron: number; stones: number; silver?: number };
 };

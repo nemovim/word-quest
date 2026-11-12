@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { MonsterKind } from '$lib/shared/types/journey.type';
+	import type { MonsterKind } from '$lib/shared/types/combat.type';
 	let { boss = false, kind = 'slime' }: { boss?: boolean; kind?: MonsterKind } = $props();
 </script>
 

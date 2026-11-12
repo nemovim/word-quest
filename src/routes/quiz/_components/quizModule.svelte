@@ -6,7 +6,7 @@
 	import QuizPrompt from './QuizPrompt.svelte';
 	import QuizSolvedPanel from './QuizSolvedPanel.svelte';
 
-	import type { BattleView, CombatUpdate, PlayerHealth } from '$lib/shared/types/journey.type';
+	import type { BattleView, CombatUpdate, PlayerHealth } from '$lib/shared/types/combat.type';
 	import type { QuizReportIssue } from '$lib/shared/types/quiz-report.type';
 	import type { QuizEncounter, QuizPageData } from '$lib/shared/types/quiz.type';
 	import type { QuizResult, SolvedResult, WrongResult } from '../quiz-result';
@@ -25,7 +25,8 @@
 			serverNow: number;
 			player?: PlayerHealth;
 			attack: number;
-			criticalChance: number;
+			comboRate: number;
+			comboCount: number;
 			gold: number;
 			iron: number;
 			stones: number;
@@ -334,7 +335,9 @@
 			<a class="button secondary" href={resolve('/')} data-sveltekit-preload-data="off">
 				학습 기록 보기
 			</a>
-			<button type="button" class="button" disabled={loading} onclick={loadMore}>다시 확인</button>
+			<button type="button" class="button" disabled={loading} aria-busy={loading} onclick={loadMore}
+				>다시 확인</button
+			>
 		</div>
 	</section>
 {:else}

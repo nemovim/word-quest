@@ -1,115 +1,40 @@
 import { randomInt, randomUUID } from 'node:crypto';
-import { isDeepStrictEqual } from 'node:util';
 
 import { error } from '@sveltejs/kit';
-import mongoose from 'mongoose';
 
-import type { GameEffect } from '$lib/shared/types/game-effect.type';
 import type {
-	Journey,
-	StudyReward,
 	BattleView,
 	CombatUpdate,
-	PlayerHealth
-} from '$lib/shared/types/journey.type';
+	PlayerHealth,
+	StudyReward
+} from '$lib/shared/types/combat.type';
 import type { User } from '$lib/shared/types/user.type';
 
-import { findNewQuizCandidates } from '$lib/repositories/quiz-card.repository';
-import { findPendingReportedVocaIds } from '$lib/repositories/quiz-report.repository';
-import { findReviewedVocaIdsByUserDirection } from '$lib/repositories/review.repository';
-import { findPermanentlyExcludedVocaIds } from '$lib/repositories/voca.repository';
-import { getRemainingNewVocaCount } from '$lib/service/new-voca-limit.service';
-import { normalizeAnswer, fillQuizTemplate } from '$lib/shared/utils/answer.util';
+import {
+	GameModel,
+	changedGameFields,
+	createInitialGameState,
+	gameProgressView,
+	readGameState,
+	withUpgradeRate,
+	type Battle,
+	type GameSnapshot,
+	type GameState
+} from '$lib/server/game-state';
 import {
 	monsterStats,
 	pickMonster,
 	monsterLevel,
 	wordCombatAmount,
-	bossOrder,
-	dungeonIron,
-	baseUpgradeChance,
-	upgradeChance,
-	upgradeCost,
-	wordBonus,
 	chestMaterialAmount,
-	WINDOW_MS
+	COMBAT_PERCENT_CAP,
+	NORMAL_CHEST_DROP_CHANCE,
+	GOLEM_STONE_DROP_CHANCE,
+	CHEST_STONE_GOLD_DIVISOR,
+	CHEST_COMMON_RESOURCE_BOOST,
+	WINDOW_MS,
+	type ResourceYieldKind
 } from '$lib/shared/utils/game.util';
-import { checkQuizAnswer } from '$lib/usecases/quiz.usecase';
-
-type Word = {
-	vocaId: string;
-	quizExampleId: string;
-	prompt: string;
-	template: string;
-	answer: string;
-};
-type Expedition = {
-	startedAt: number;
-	words: Word[];
-	solved: number;
-	mistakes: number[];
-	boss: number[];
-	bossSolved: number;
-	bossHp: number;
-	cleared: boolean;
-};
-type Battle = BattleView & {
-	claims: { key: string; at: number }[];
-	opened: Record<string, StudyReward>;
-};
-type GameState = {
-	baseSuccessRate?: number;
-	silver: number;
-	hitGold: number;
-	incomeUpgrades: number;
-	chargeVersion?: number;
-	successRate: number;
-	chanceUpgrades: number;
-	attackUpgrades: number;
-	criticalUpgrades: number;
-	combatVersion?: number;
-	player?: PlayerHealth;
-	battle?: Battle;
-	journey?: Journey;
-	revision: number;
-	gold: number;
-	iron: number;
-	stones: number;
-	weapon: number;
-	attack: number;
-	criticalChance: number;
-	upgradeFailures: number;
-	victories: number;
-	expedition: Expedition | null;
-};
-type GameSnapshot = { state: GameState; original: GameState };
-const schema = new mongoose.Schema({
-	_id: { type: String, required: true },
-	state: { type: mongoose.Schema.Types.Mixed, required: true },
-	lockUntil: { type: Number, default: 0 }
-});
-const Game = mongoose.models.Game ?? mongoose.model('Game', schema);
-const initial = (): GameState => ({
-	combatVersion: 5,
-	silver: 0,
-	hitGold: 1,
-	incomeUpgrades: 0,
-	chargeVersion: 1,
-	successRate: 0,
-	chanceUpgrades: 0,
-	attackUpgrades: 0,
-	criticalUpgrades: 0,
-	revision: 0,
-	gold: 0,
-	iron: 0,
-	stones: 0,
-	weapon: 0,
-	attack: 10,
-	criticalChance: 1,
-	upgradeFailures: 0,
-	victories: 0,
-	expedition: null
-});
 
 function spawnMonster(level: number) {
 	const kind = pickMonster(randomInt(100));
@@ -117,7 +42,7 @@ function spawnMonster(level: number) {
 	const stats = monsterStats(monsterLevel(level), boss);
 	return { kind, boss, level: stats.level, hp: stats.maxHp, maxHp: stats.maxHp };
 }
-const freshBattle = (level: number): Battle => ({
+export const createFreshBattle = (level: number): Battle => ({
 	...spawnMonster(level),
 	kills: 0,
 	chests: [],
@@ -145,6 +70,7 @@ function combatUpdate(
 	return {
 		revision: state.revision,
 		hitGold: state.hitGold,
+		comboCount: state.comboCount,
 		player: state.player,
 		reward,
 		battle: battleView(battle),
@@ -154,17 +80,14 @@ function combatUpdate(
 
 async function mutateCombat(
 	user: User,
-	operation: (
-		state: GameState,
-		battle: Battle
-	) => StudyReward & { healing?: number; playerDamage?: number },
+	operation: (state: GameState, battle: Battle) => CombatUpdate['reward'],
 	loaded?: GameSnapshot | null
 ): Promise<CombatUpdate> {
 	for (let attempt = 0; attempt < 5; attempt += 1) {
 		let snapshot = attempt === 0 && loaded !== undefined ? loaded : await readGameState(user);
 		if (!snapshot) {
-			const original = initial();
-			const inserted = await Game.updateOne(
+			const original = createInitialGameState();
+			const inserted = await GameModel.updateOne(
 				{ _id: user._id },
 				{ $setOnInsert: { state: original, lockUntil: 0 } },
 				{ upsert: true }
@@ -174,14 +97,14 @@ async function mutateCombat(
 		}
 		const state = withUpgradeRate(snapshot.state, user);
 		recoverPlayer(state.player);
-		const battle = state.battle ?? freshBattle(user.currentLevel);
+		const battle = state.battle ?? createFreshBattle(user.currentLevel);
 		const cutoff = Date.now() - WINDOW_MS;
 		battle.claims = battle.claims.filter((claim) => claim.at > cutoff);
 		const reward = operation(state, battle);
 		const revision = state.revision;
 		state.battle = battle;
 		state.revision += 1;
-		const saved = await Game.updateOne(
+		const saved = await GameModel.updateOne(
 			{ _id: user._id, 'state.revision': revision, lockUntil: { $lte: Date.now() } },
 			{ $set: changedGameFields(snapshot.original, state) }
 		);
@@ -190,6 +113,15 @@ async function mutateCombat(
 	error(409, '다른 요청이 진행 중이에요. 잠시 후 다시 시도해 주세요.');
 }
 const emptyReward = (): StudyReward => ({ gold: 0, iron: 0, stones: 0, damage: 0, clear: null });
+function applyResourceYield(state: GameState, kind: ResourceYieldKind, amount: number): number {
+	const extra = amount * (state.resourceYield[kind] / 100);
+	if (!Number.isFinite(extra)) error(500, '자원 획득량을 계산하지 못했어요.');
+	const whole = Math.floor(extra);
+	const fraction = extra - whole;
+	const total = amount + whole + (fraction > 0 && randomInt(1000) < fraction * 1000 ? 1 : 0);
+	if (!Number.isFinite(total)) error(500, '자원 획득량을 계산하지 못했어요.');
+	return total;
+}
 export async function rewardStudy(
 	user: User,
 	key: string,
@@ -199,20 +131,71 @@ export async function rewardStudy(
 	return mutateCombat(
 		user,
 		(state, battle) => {
-			const reward = emptyReward();
+			const reward: CombatUpdate['reward'] = emptyReward();
 			if (sessionId) assertPlayer(state, sessionId);
 			if (battle.claims.some((claim) => claim.key === `hit:${key}`)) return reward;
 			battle.claims.push({ key: `hit:${key}`, at: Date.now() });
-			reward.critical = randomInt(1000) < Math.round(state.criticalChance * 10);
-			reward.damage = Math.min(battle.hp, state.attack * (reward.critical ? 2 : 1));
+			state.comboCount = Math.min(1000, state.comboCount + 1);
+			const comboRate = Math.min(COMBAT_PERCENT_CAP, state.comboCount * state.comboRate);
+			const comboBonus =
+				state.comboCount >= 2 && state.comboRate > 0
+					? Math.max(1, Math.floor((state.attack * comboRate) / 100))
+					: 0;
+			reward.combo = state.comboCount >= 2 ? state.comboCount : 0;
+			if (reward.combo) reward.comboBonus = comboBonus;
+			reward.damage = Math.min(battle.hp, state.attack + comboBonus);
 			battle.hp -= reward.damage;
 			reward.gold = state.hitGold * (battle.boss ? 2 : 1);
 			state.gold += reward.gold;
 			if (battle.hp === 0) {
 				reward.clear = battle.boss ? 'boss' : 'dungeon';
-				battle.chests.push({ id: randomUUID(), boss: battle.boss, level: battle.level ?? 10 });
+				reward.chest = false;
+				if (battle.boss) {
+					reward.chest = true;
+					battle.chests.push({ id: randomUUID(), boss: true, level: battle.level ?? 10 });
+				} else {
+					switch (battle.kind ?? 'slime') {
+						case 'slime':
+							{
+								const bonusGold = 5 + randomInt(6);
+								reward.gold += bonusGold;
+								state.gold += bonusGold;
+							}
+							break;
+						case 'mushroom':
+							reward.iron = 3 + randomInt(4);
+							state.iron += reward.iron;
+							break;
+						case 'bat':
+							reward.silver = 1 + randomInt(3);
+							state.silver += reward.silver;
+							break;
+						case 'golem':
+							if (randomInt(100) < GOLEM_STONE_DROP_CHANCE) {
+								reward.stones = 1;
+								state.stones += reward.stones;
+							}
+							break;
+					}
+					if (randomInt(100) < NORMAL_CHEST_DROP_CHANCE) {
+						reward.chest = true;
+						battle.chests.push({
+							id: randomUUID(),
+							boss: false,
+							level: battle.level ?? 10
+						});
+					}
+				}
 				if (battle.boss) state.victories += 1;
 				battle.kills += 1;
+				const player = state.player;
+				if (player && player.hp > 0 && state.armor.killRecovery > 0) {
+					const restored = Math.min(state.armor.killRecovery, player.maxHp - player.hp);
+					if (restored > 0) {
+						player.hp += restored;
+						reward.playerHealing = restored;
+					}
+				}
 				Object.assign(battle, spawnMonster(user.currentLevel));
 			}
 			return reward;
@@ -233,12 +216,13 @@ export async function healMonster(
 			if (sessionId) assertPlayer(state, sessionId);
 			const reward = { ...emptyReward(), healing: 0, playerDamage: 0, playerCritical: !!sessionId };
 			if (battle.claims.some((claim) => claim.key === `pass:${key}`)) return reward;
+			state.comboCount = 0;
 			battle.claims.push({ key: `pass:${key}`, at: Date.now() });
 			reward.healing = Math.min(wordCombatAmount(level, 3), battle.maxHp - battle.hp);
 			battle.hp += reward.healing;
 			if (sessionId) {
 				const player = assertPlayer(state, sessionId);
-				reward.playerDamage = damagePlayer(player, level, battle.boss, true);
+				reward.playerDamage = damagePlayer(player, level, battle.boss, state.armor.defense, true);
 			}
 			return reward;
 		},
@@ -258,8 +242,16 @@ function recoverPlayer(player?: PlayerHealth) {
 	player.hp = Math.min(player.maxHp, player.hp + minutes * 2);
 	player.healedAt = player.hp === player.maxHp ? now : player.healedAt + minutes * 60000;
 }
-function damagePlayer(player: PlayerHealth, level: number, boss: boolean, critical = false) {
-	const damage = Math.min(player.hp, wordCombatAmount(level, boss ? 3 : 2) * (critical ? 2 : 1));
+function damagePlayer(
+	player: PlayerHealth,
+	level: number,
+	boss: boolean,
+	defense: number,
+	critical = false
+) {
+	const incoming = wordCombatAmount(level, boss ? 3 : 2) * (critical ? 2 : 1);
+	const reduced = Math.max(1, Math.round(incoming * (1 - defense / 100)));
+	const damage = Math.min(player.hp, reduced);
 	player.hp -= damage;
 	if (player.hp === 0) player.recoverAt = Date.now() + RECOVERY_MS;
 	return damage;
@@ -293,7 +285,12 @@ export async function beginExploration(user: User): Promise<CombatUpdate> {
 	return mutateCombat(user, (state) => {
 		assertRecovered(state);
 		if (!state.player || state.player.hp <= 0)
-			state.player = { id: randomUUID(), hp: 100, maxHp: 100, healedAt: Date.now() };
+			state.player = {
+				id: randomUUID(),
+				hp: state.armor.maxHp,
+				maxHp: state.armor.maxHp,
+				healedAt: Date.now()
+			};
 		return emptyReward();
 	});
 }
@@ -301,7 +298,7 @@ export async function refreshPlayer(user: User, sessionId: string): Promise<Comb
 	for (let attempt = 0; attempt < 5; attempt += 1) {
 		const { state, original } = await readExploration(user, sessionId);
 		const player = assertPlayer(state, sessionId);
-		const battle = state.battle ?? freshBattle(user.currentLevel);
+		const battle = state.battle ?? createFreshBattle(user.currentLevel);
 		const previousHp = player.hp;
 		const previousHealedAt = player.healedAt;
 		if (player.hp < player.maxHp) recoverPlayer(player);
@@ -312,7 +309,7 @@ export async function refreshPlayer(user: User, sessionId: string): Promise<Comb
 		const revision = state.revision;
 		state.battle = battle;
 		state.revision += 1;
-		const saved = await Game.updateOne(
+		const saved = await GameModel.updateOne(
 			{ _id: user._id, 'state.revision': revision, lockUntil: { $lte: Date.now() } },
 			{ $set: changedGameFields(original, state) }
 		);
@@ -333,7 +330,8 @@ export async function hurtPlayer(
 			const reward = { ...emptyReward(), playerDamage: 0 };
 			if (battle.claims.some((c) => c.key === `hurt:${sessionId}:${actionId}`)) return reward;
 			const player = assertPlayer(state, sessionId);
-			reward.playerDamage = damagePlayer(player, level, battle.boss);
+			state.comboCount = 0;
+			reward.playerDamage = damagePlayer(player, level, battle.boss, state.armor.defense);
 			battle.claims.push({ key: `hurt:${sessionId}:${actionId}`, at: Date.now() });
 			return reward;
 		},
@@ -347,118 +345,39 @@ export async function openChest(user: User, id: string): Promise<CombatUpdate> {
 		const chest = battle.chests.find((item) => item.id === id);
 		if (!chest) error(404, '이 보물상자를 찾을 수 없어요.');
 		const stats = monsterStats(chest.level ?? 10);
-		const gold = Math.floor((25 + randomInt(26)) * stats.rewardMultiplier) * (chest.boss ? 3 : 1);
-		const reward = {
+		const baseGold = Math.floor((25 + randomInt(26)) * stats.rewardMultiplier);
+		const gold = Math.floor(baseGold * CHEST_COMMON_RESOURCE_BOOST);
+		const baseReward = {
 			...emptyReward(),
 			gold,
 			iron: chestMaterialAmount(gold, 5, randomInt(5)),
-			stones: chestMaterialAmount(gold, 200, randomInt(200))
+			stones: chestMaterialAmount(
+				baseGold,
+				CHEST_STONE_GOLD_DIVISOR,
+				randomInt(CHEST_STONE_GOLD_DIVISOR)
+			)
 		};
 		const silver = chestMaterialAmount(gold, 20, randomInt(20));
-		const loot = { ...reward, silver };
-		state.silver += silver;
-		state.gold += reward.gold;
-		state.iron += reward.iron;
-		state.stones += reward.stones;
+		const loot = {
+			...baseReward,
+			gold: applyResourceYield(state, 'gold', baseReward.gold),
+			iron: applyResourceYield(state, 'iron', baseReward.iron),
+			stones: applyResourceYield(state, 'stones', baseReward.stones),
+			silver: applyResourceYield(state, 'silver', silver)
+		};
+		state.silver += loot.silver;
+		state.gold += loot.gold;
+		state.iron += loot.iron;
+		state.stones += loot.stones;
 		battle.chests = battle.chests.filter((item) => item.id !== id);
 		battle.opened[id] = loot;
 		return loot;
 	});
 }
 
-function changedGameFields(original: GameState, state: GameState): Record<string, unknown> {
-	const changed: Record<string, unknown> = {};
-	function addChanges(
-		prefix: string,
-		before: Record<string, unknown>,
-		after: Record<string, unknown>
-	) {
-		for (const [key, value] of Object.entries(after)) {
-			if (!isDeepStrictEqual(before[key], value)) changed[prefix + key] = value;
-		}
-	}
-	const { battle, ...fields } = state;
-	addChanges('state.', original, fields);
-	if (battle && original.battle) addChanges('state.battle.', original.battle, battle);
-	else if (battle) changed['state.battle'] = battle;
-	return changed;
-}
-
-async function readGameState(user: User, includeLegacy = false): Promise<GameSnapshot | null> {
-	const projection = includeLegacy ? undefined : { 'state.expedition': 0, 'state.journey': 0 };
-	const document = await Game.findById(user._id, projection).lean<{
-		state: GameState;
-	}>();
-	if (!document) return null;
-	const original = structuredClone(document.state);
-	if (document && (document.state.combatVersion ?? 0) < 2) {
-		const battle = document.state.battle;
-		if (battle) {
-			battle.level = monsterLevel(battle.level ?? 1);
-			battle.chests = battle.chests.map((chest) => ({
-				...chest,
-				level: monsterLevel(chest.level ?? 1)
-			}));
-		}
-		document.state.combatVersion = 2;
-	}
-	if (document && (document.state.combatVersion ?? 0) < 3) {
-		const battle = document.state.battle;
-		if (battle) {
-			battle.maxHp = Math.floor(battle.maxHp * 1.5);
-			battle.hp = Math.min(battle.maxHp, Math.floor(battle.hp * 1.5));
-		}
-		document.state.combatVersion = 3;
-	}
-
-	if (document && (document.state.combatVersion ?? 0) < 4) {
-		const battle = document.state.battle;
-		if (battle?.boss) {
-			battle.maxHp *= 2;
-			battle.hp *= 2;
-		}
-		document.state.combatVersion = 4;
-	}
-	if (document && (document.state.combatVersion ?? 0) < 5) {
-		const battle = document.state.battle;
-		if (battle) {
-			const maxHp = monsterStats(battle.level ?? 10, battle.boss).maxHp;
-			battle.hp = Math.min(maxHp, Math.ceil((battle.hp / battle.maxHp) * maxHp));
-			battle.maxHp = maxHp;
-		}
-		document.state.combatVersion = 5;
-	}
-
-	const state = {
-		...document.state,
-		silver: document.state.silver ?? 0,
-		hitGold: document.state.hitGold ?? 1,
-		incomeUpgrades: document.state.incomeUpgrades ?? 0,
-		chargeVersion: 1,
-		successRate: document.state.chargeVersion === 1 ? (document.state.successRate ?? 0) : 0,
-		chanceUpgrades: document.state.chargeVersion === 1 ? (document.state.chanceUpgrades ?? 0) : 0,
-		attackUpgrades: document.state.attackUpgrades ?? document.state.weapon,
-		criticalUpgrades: document.state.criticalUpgrades ?? document.state.weapon,
-		iron: document.state.iron ?? 0,
-		upgradeFailures: document.state.upgradeFailures ?? 0,
-		attack: document.state.attack ?? 10 + document.state.weapon * 3,
-		criticalChance: document.state.criticalChance ?? 20
-	};
-	return { original, state: withUpgradeRate(state, user) };
-}
-
-function withUpgradeRate(state: GameState, user: User): GameState {
-	const base = baseUpgradeChance(user.currentLevel);
-	return {
-		...state,
-		baseSuccessRate: base,
-		successRate: Math.min(100, base + Math.max(0, state.successRate - (state.baseSuccessRate ?? 0)))
-	};
-}
-
-export async function loadGame(user: User, includeLegacy = true) {
-	let snapshot = await readGameState(user, includeLegacy);
-	let state = snapshot?.state ?? withUpgradeRate(initial(), user);
+export async function loadGame(user: User) {
+	let snapshot = await readGameState(user);
+	let state = snapshot?.state ?? withUpgradeRate(createInitialGameState(), user);
 	if (
 		!state.battle ||
 		(state.player &&
@@ -467,349 +386,23 @@ export async function loadGame(user: User, includeLegacy = true) {
 				(state.player.hp < state.player.maxHp && Date.now() - state.player.healedAt >= 60000)))
 	) {
 		await mutateCombat(user, () => emptyReward(), snapshot);
-		snapshot = await readGameState(user, includeLegacy);
-		state = snapshot?.state ?? withUpgradeRate(initial(), user);
+		snapshot = await readGameState(user);
+		state = snapshot?.state ?? withUpgradeRate(createInitialGameState(), user);
 	}
-	const expedition = state.expedition;
-	const index =
-		expedition == null
-			? -1
-			: expedition.solved < 40
-				? expedition.solved
-				: expedition.boss[expedition.bossSolved];
-	const word = expedition?.words[index];
 	return {
 		...state,
 		hitGold: state.hitGold,
-		battle: battleView(state.battle ?? freshBattle(user.currentLevel)),
-		journey:
-			state.journey && !(state.journey.cleared && Date.now() >= state.journey.startedAt + WINDOW_MS)
-				? {
-						solved: state.journey.solved,
-						bossHp: state.journey.bossHp,
-						cleared: state.journey.cleared,
-						startedAt: state.journey.startedAt
-					}
-				: null,
-		expedition:
-			expedition == null
-				? null
-				: {
-						startedAt: expedition.startedAt,
-						solved: expedition.solved,
-						bossSolved: expedition.bossSolved,
-						bossHp: expedition.bossHp,
-						cleared: expedition.cleared
-					},
-		question:
-			word == null || expedition?.cleared ? null : { prompt: word.prompt, template: word.template },
+		battle: battleView(state.battle ?? createFreshBattle(user.currentLevel)),
 		serverNow: Date.now()
 	};
 }
 
 export async function loadGameView(user: User) {
-	const game = await loadGame(user, false);
+	const game = await loadGame(user);
 	return {
-		revision: game.revision,
+		...gameProgressView(game),
 		player: game.player,
 		serverNow: game.serverNow,
-		battle: game.battle,
-		gold: game.gold,
-		iron: game.iron,
-		stones: game.stones,
-		silver: game.silver,
-		hitGold: game.hitGold,
-		incomeUpgrades: game.incomeUpgrades,
-		weapon: game.weapon,
-		attack: game.attack,
-		criticalChance: game.criticalChance,
-		successRate: game.successRate,
-		baseSuccessRate: game.baseSuccessRate,
-		attackUpgrades: game.attackUpgrades,
-		criticalUpgrades: game.criticalUpgrades
+		battle: game.battle
 	};
-}
-
-export async function actGame(user: User, form: FormData) {
-	if (form.get('action') === 'upgrade') {
-		const snapshot = await readGameState(user);
-		const state = snapshot?.state ?? withUpgradeRate(initial(), user);
-		return actGameLocked(user, form, state, snapshot?.original);
-	}
-	await Game.updateOne(
-		{ _id: user._id },
-		{ $setOnInsert: { state: initial(), lockUntil: 0 } },
-		{ upsert: true }
-	);
-	const lockUntil = Date.now() + 120_000;
-	const locked = await Game.updateOne(
-		{
-			_id: user._id,
-			'state.revision': Number(form.get('revision')),
-			lockUntil: { $lte: Date.now() }
-		},
-		{ $set: { lockUntil } }
-	);
-	if (locked.modifiedCount !== 1)
-		error(409, '다른 요청이 진행 중이거나 진행 상황이 바뀌었어요. 새로고침 후 다시 시도해 주세요.');
-	try {
-		const state = (await readGameState(user, true))?.state ?? withUpgradeRate(initial(), user);
-		return await actGameLocked(user, form, state);
-	} finally {
-		await Game.updateOne({ _id: user._id, lockUntil }, { $set: { lockUntil: 0 } });
-	}
-}
-
-async function actGameLocked(user: User, form: FormData, state: GameState, original?: GameState) {
-	const revision = Number(form.get('revision'));
-	if (revision !== state.revision)
-		error(409, '진행 상황이 바뀌었어요. 새로고침 후 다시 시도해 주세요.');
-	const action = form.get('action');
-	const before = {
-		gold: state.gold,
-		iron: state.iron,
-		stones: state.stones,
-		weapon: state.weapon,
-		successRate: state.successRate,
-		solved: state.expedition?.solved ?? 0,
-		bossSolved: state.expedition?.bossSolved ?? 0,
-		bossHp: state.expedition?.bossHp ?? 80,
-		cleared: state.expedition?.cleared ?? false
-	};
-	let message = '';
-	if (action === 'start') {
-		if (
-			state.expedition &&
-			(!state.expedition.cleared || Date.now() < state.expedition.startedAt + WINDOW_MS)
-		)
-			error(400, '현재 탐험을 완료하고 12시간 후 다음 탐험을 시작할 수 있어요.');
-		if ((await getRemainingNewVocaCount(user._id, new Date())) < 40)
-			error(
-				400,
-				'새 단어 학습 여유가 40개일 때 탐험을 시작할 수 있어요. 기존 학습의 12시간 제한이 풀린 뒤 다시 와 주세요.'
-			);
-		const [reviewed, pending, excluded] = await Promise.all([
-			findReviewedVocaIdsByUserDirection(user._id, 'promptLang', 'ko'),
-			findPendingReportedVocaIds(),
-			findPermanentlyExcludedVocaIds()
-		]);
-		const candidates = await findNewQuizCandidates({
-			currentLevel: user.currentLevel,
-			excludedVocaIds: [...reviewed, ...pending, ...excluded],
-			limit: 40,
-			targetLang: 'en'
-		});
-		const words = candidates
-			.filter(({ voca, quizCard }) => voca.targetLang === 'en' && quizCard.examples.length > 0)
-			.slice(0, 40)
-			.map(({ voca, quizCard }) => {
-				const example = quizCard.examples[0];
-				return {
-					vocaId: voca._id,
-					quizExampleId: example._id,
-					prompt: fillQuizTemplate(example.sourceSentenceTemplate, example.sourceFillText),
-					template: example.targetSentenceTemplate,
-					answer: example.targetFillText
-				};
-			});
-		if (words.length !== 40)
-			error(400, '탐험에 필요한 새로운 영어 단어 40개가 아직 부족해요. 단어를 추가해 주세요.');
-		state.expedition = {
-			startedAt: Date.now(),
-			words,
-			solved: 0,
-			mistakes: Array(40).fill(0),
-			boss: [],
-			bossSolved: 0,
-			bossHp: 80,
-			cleared: false
-		};
-		message = '단어 숲에 도착! 슬라임과 첫 8단어를 만나봐요.';
-	} else if (action === 'upgrade') {
-		const kind = form.get('kind');
-		if (kind !== 'chance' && kind !== 'attack' && kind !== 'critical' && kind !== 'income')
-			error(400, '강화할 항목을 선택해 주세요.');
-		if (kind !== 'chance' && state.successRate <= 0)
-			error(400, '골드로 강화 성공률을 먼저 충전해 주세요.');
-		if (kind === 'chance' && state.successRate >= 100) error(400, '강화 성공률이 이미 최대예요.');
-		if (kind === 'critical' && state.criticalChance >= 100)
-			error(400, '치명타 확률이 이미 최대예요.');
-		const level =
-			kind === 'chance'
-				? state.weapon
-				: kind === 'attack'
-					? state.attackUpgrades
-					: kind === 'critical'
-						? state.criticalUpgrades
-						: state.incomeUpgrades;
-		const cost = upgradeCost(level, kind, state.successRate);
-		if (
-			state.gold < cost.gold ||
-			state.iron < cost.iron ||
-			state.stones < cost.stones ||
-			state.silver < cost.silver
-		)
-			error(400, '강화 재료가 부족해요.');
-		state.gold -= cost.gold;
-		state.iron -= cost.iron;
-		state.stones -= cost.stones;
-		state.silver -= cost.silver;
-		if (kind === 'chance') {
-			const gain = Math.min(2 + randomInt(5), 100 - state.successRate);
-			state.successRate += gain;
-			state.chanceUpgrades += 1;
-			message = `강화 성공률 +${gain}%p → ${state.successRate}%`;
-		} else if (randomInt(100) < upgradeChance(state.successRate)) {
-			if (kind === 'attack') {
-				const gain = 2 + randomInt(5);
-				state.attack += gain;
-				state.attackUpgrades += 1;
-				message = `공격력 +${gain} → ${state.attack}`;
-			} else if (kind === 'income') {
-				const gain = 1 + randomInt(3);
-				state.hitGold += gain;
-				state.incomeUpgrades += 1;
-				message = `명중 골드 +${gain} → ${state.hitGold}`;
-			} else {
-				const before = state.criticalChance;
-				state.criticalChance = Math.min(100, Math.round(before * 10 + 5 + randomInt(11)) / 10);
-				const gain = (Math.round(state.criticalChance * 10) - Math.round(before * 10)) / 10;
-				state.criticalUpgrades += 1;
-				message = `치명타 확률 +${gain.toFixed(1)}%p → ${state.criticalChance.toFixed(1)}%`;
-			}
-			state.weapon += 1;
-			state.successRate = baseUpgradeChance(user.currentLevel);
-			state.baseSuccessRate = state.successRate;
-			state.chanceUpgrades = 0;
-			message += ` · 기본 성공률 ${state.successRate}%로 초기화`;
-		} else {
-			message = `강화 실패 · 능력치 유지 · 성공률 ${state.successRate}%`;
-		}
-	} else if (action === 'answer' || action === 'hint') {
-		const expedition = state.expedition;
-		if (!expedition || expedition.cleared) error(400, '먼저 탐험을 시작해 주세요.');
-		const isBoss = expedition.solved === 40;
-		const index = isBoss ? expedition.boss[expedition.bossSolved] : expedition.solved;
-		const word = expedition.words[index];
-		if (action === 'hint') {
-			expedition.mistakes[index] += 1;
-			message = `힌트는 ${word.answer}! 한 번 읽고 직접 입력해 봐요.`;
-		} else {
-			const answer = String(form.get('answer') ?? '').trim();
-			if (!answer || answer.length > 200) error(400, '200자 이내로 정답을 입력해 주세요.');
-			const correct = isBoss
-				? normalizeAnswer(answer, 'en') === normalizeAnswer(word.answer, 'en')
-				: (
-						await checkQuizAnswer({
-							user,
-							vocaId: word.vocaId,
-							quizExampleId: word.quizExampleId,
-							promptLang: 'ko',
-							answerLang: 'en',
-							answerText: answer,
-							isRetry: expedition.mistakes[index] > 0
-						})
-					).status === 'correct';
-			if (!correct) {
-				expedition.mistakes[index] += 1;
-				message = '괜찮아요, 한 번 더! 헷갈리면 힌트를 눌러봐요.';
-			} else if (isBoss) {
-				expedition.bossSolved += 1;
-				expedition.bossHp = Math.max(0, expedition.bossHp - state.attack);
-				message = `정답! ${state.attack} 피해를 입혔어요.`;
-				if (expedition.bossHp === 0) {
-					expedition.cleared = true;
-					state.gold += 100;
-					const stones = randomInt(100) < 20 ? 2 : 1;
-					state.stones += stones;
-					state.victories += 1;
-					message = `${stones === 2 ? '희귀 보상! ' : ''}보스 클리어 · 골드 +100 · 강화석 +${stones}`;
-				}
-			} else {
-				expedition.solved += 1;
-				const dungeonCleared = expedition.solved % 8 === 0;
-				const bonus = wordBonus(randomInt(100));
-				const perfect =
-					dungeonCleared &&
-					expedition.mistakes
-						.slice(expedition.solved - 8, expedition.solved)
-						.every((count) => count === 0);
-				const iron = (dungeonCleared ? dungeonIron(randomInt(100)) : 0) + (perfect ? 2 : 0);
-				state.gold += 5 + (dungeonCleared ? 30 : 0) + bonus.gold;
-				state.iron += iron + bonus.iron;
-				state.stones += bonus.stones;
-				message = dungeonCleared
-					? `던전 클리어 · 골드 +${35 + bonus.gold} · 철 +${iron + bonus.iron}`
-					: `정답 · 골드 +${5 + bonus.gold}${bonus.iron ? ' · 철 +1' : ''}`;
-				if (bonus.stones) message += ' · 희귀 드롭! 강화석 +1';
-				if (bonus.gold) message += ' · 골드 보너스!';
-				if (perfect) message += ' · 8단어 첫 시도 정답 보너스 포함';
-				if (expedition.solved === 40) {
-					expedition.boss = bossOrder(expedition.mistakes);
-					message += ' 보스전이 열렸어요!';
-				}
-			}
-		}
-	} else error(400, '알 수 없는 행동이에요.');
-	state.revision += 1;
-	const result = await Game.updateOne(
-		{
-			_id: user._id,
-			'state.revision': revision,
-			...(action === 'upgrade' ? { lockUntil: { $lte: Date.now() } } : {})
-		},
-		{ $set: original ? changedGameFields(original, state) : { state } }
-	);
-	if (result.modifiedCount !== 1)
-		error(409, '다른 창에서 진행 상황이 바뀌었어요. 새로고침해 주세요.');
-	const answered =
-		action === 'answer' &&
-		(state.expedition!.solved > before.solved || state.expedition!.bossSolved > before.bossSolved);
-	const effect: GameEffect = {
-		id: state.revision,
-		kind:
-			action === 'upgrade'
-				? state.weapon > before.weapon || state.successRate > before.successRate
-					? 'upgrade-success'
-					: 'upgrade-failure'
-				: action === 'answer'
-					? answered
-						? 'hit'
-						: 'miss'
-					: 'none',
-		damage: answered
-			? before.solved === 40
-				? before.bossHp - state.expedition!.bossHp
-				: state.attack
-			: 0,
-		gold: Math.max(0, state.gold - before.gold),
-		iron: Math.max(0, state.iron - before.iron),
-		stones: Math.max(0, state.stones - before.stones),
-		clear:
-			answered && state.expedition!.cleared && !before.cleared
-				? 'boss'
-				: answered && state.expedition!.solved > before.solved && state.expedition!.solved % 8 === 0
-					? 'dungeon'
-					: null
-	};
-	const game =
-		action === 'upgrade'
-			? {
-					revision: state.revision,
-					gold: state.gold,
-					iron: state.iron,
-					stones: state.stones,
-					silver: state.silver,
-					hitGold: state.hitGold,
-					incomeUpgrades: state.incomeUpgrades,
-					weapon: state.weapon,
-					attack: state.attack,
-					criticalChance: state.criticalChance,
-					successRate: state.successRate,
-					baseSuccessRate: state.baseSuccessRate,
-					attackUpgrades: state.attackUpgrades,
-					criticalUpgrades: state.criticalUpgrades
-				}
-			: undefined;
-	return { message, effect, game };
 }

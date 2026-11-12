@@ -237,7 +237,7 @@
 				문제 신고
 			</button>
 		{:else}
-			<form class="report-form" onsubmit={submitReport}>
+			<form class="report-form" aria-busy={isReporting} onsubmit={submitReport}>
 				<fieldset>
 					<legend>문제 유형 (복수 선택 가능)</legend>
 					<div class="issue-options">
@@ -287,7 +287,12 @@
 </section>
 {#if !isSolved}
 	<section class="result-panel">
-		<form id="quiz-answer-form" class="answer-actions" onsubmit={handleSubmit}>
+		<form
+			id="quiz-answer-form"
+			class="answer-actions"
+			aria-busy={isSubmitting}
+			onsubmit={handleSubmit}
+		>
 			<button type="button" class="button secondary" onclick={passAnswer} disabled={isSubmitting}
 				>넘기기</button
 			>

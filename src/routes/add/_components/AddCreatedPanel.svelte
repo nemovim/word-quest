@@ -51,7 +51,7 @@
 		<aside class="post-it add-error" role="alert">{error}</aside>
 	{/if}
 
-	<div>
+	<div aria-busy={isSubmitting}>
 		{#if !queuedForReview && !isAlreadyLearning}
 			<form method="POST" action="?/memorize" aria-busy={isSubmitting} use:enhance={memorize}>
 				<AddHiddenInputs {context} />

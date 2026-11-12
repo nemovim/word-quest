@@ -29,8 +29,8 @@ export function createGameAudio() {
 				/* Visual feedback still works without audio support. */
 			}
 		},
-		play(kind: 'hit' | 'critical' | 'loot' | 'rare' | 'upgrade-success' | 'upgrade-failure') {
-			if (kind === 'critical') {
+		play(kind: 'hit' | 'combo' | 'loot' | 'rare' | 'upgrade-success' | 'upgrade-failure') {
+			if (kind === 'combo') {
 				tone(300, 0, 0.09, 'triangle');
 				tone(65, 0.025, 0.25);
 				tone(940, 0.06, 0.15, 'triangle');

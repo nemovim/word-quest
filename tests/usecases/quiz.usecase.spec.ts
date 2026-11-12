@@ -221,8 +221,8 @@ describe('quiz.usecase', () => {
 		]);
 	});
 
-	it('does not include new words when eight due reviews fill the session', async () => {
-		const reviewed = Array.from({ length: 8 }, (_, index) => {
+	it('does not include new words when ten due reviews fill the session', async () => {
+		const reviewed = Array.from({ length: 10 }, (_, index) => {
 			const vocaId = `review-${index + 1}`;
 			return makeReview({ _id: `review-record-${index + 1}`, vocaId, correctCount: 1 });
 		});
@@ -245,14 +245,14 @@ describe('quiz.usecase', () => {
 
 		const result = await loadQuizPage(baseRequest.user);
 
-		expect(result.encounters).toHaveLength(5);
+		expect(result.encounters).toHaveLength(10);
 		expect(result.encounters.every((encounter) => !encounter.isNew)).toBe(true);
 		expect(findCandidatesSpy).not.toHaveBeenCalled();
 		expect(ReviewRepository.findReviewedVocaIdsByUserDirection).not.toHaveBeenCalled();
 	});
 
 	it('fills the slot of a due review that has no example', async () => {
-		const reviewed = Array.from({ length: 5 }, (_, index) =>
+		const reviewed = Array.from({ length: 10 }, (_, index) =>
 			makeReview({ vocaId: `due-${index}`, correctCount: 1 })
 		);
 		vi.spyOn(ReviewRepository, 'findDueReviewGroupsByUser').mockResolvedValue({
@@ -281,6 +281,11 @@ describe('quiz.usecase', () => {
 			'due-2',
 			'due-3',
 			'due-4',
+			'due-5',
+			'due-6',
+			'due-7',
+			'due-8',
+			'due-9',
 			'new-word'
 		]);
 		expect(candidates).toHaveBeenCalledOnce();
@@ -333,7 +338,7 @@ describe('quiz.usecase', () => {
 			'promptLang',
 			'ko',
 			expect.any(Date),
-			5,
+			10,
 			['voca-1']
 		);
 	});
@@ -356,7 +361,7 @@ describe('quiz.usecase', () => {
 		);
 	});
 
-	it('loads five candidates regardless of the former new-word quota', async () => {
+	it('requests ten candidates regardless of the former new-word quota', async () => {
 		vi.spyOn(ReviewRepository, 'findDueReviewGroupsByUser').mockResolvedValue({
 			reviewed: [],
 			new: []
@@ -370,7 +375,7 @@ describe('quiz.usecase', () => {
 
 		expect(findCandidatesSpy).toHaveBeenCalledWith(
 			expect.objectContaining({
-				limit: 5
+				limit: 10
 			})
 		);
 	});

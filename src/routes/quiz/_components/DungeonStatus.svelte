@@ -6,13 +6,19 @@
 		CombatUpdate,
 		PlayerHealth,
 		StudyReward
-	} from '$lib/shared/types/journey.type';
+	} from '$lib/shared/types/combat.type';
 
 	import BattleArena from '$lib/components/BattleArena.svelte';
 	import ChestStash from '$lib/components/ChestStash.svelte';
 	import ResourceIcon from '$lib/components/ResourceIcon.svelte';
 	import { createGameAudio } from '$lib/shared/utils/game-audio';
-	import { monsterStats } from '$lib/shared/utils/game.util';
+	import {
+		GOLEM_STONE_DROP_CHANCE,
+		monsterStats,
+		NORMAL_CHEST_DROP_CHANCE,
+		RESOURCE_YIELD_KINDS,
+		RESOURCE_YIELD_NAMES
+	} from '$lib/shared/utils/game.util';
 	let {
 		game,
 		combat,
@@ -22,7 +28,8 @@
 			revision: number;
 			player?: PlayerHealth;
 			attack: number;
-			criticalChance: number;
+			comboRate: number;
+			comboCount: number;
 			gold: number;
 			iron: number;
 			stones: number;
@@ -35,8 +42,16 @@
 	} = $props();
 	const battle = $derived(combat?.battle ?? game.battle);
 	const wallet = $derived(combat?.wallet ?? game);
+	const resources = $derived(
+		RESOURCE_YIELD_KINDS.map((kind) => ({
+			kind,
+			name: RESOURCE_YIELD_NAMES[kind],
+			amount: wallet[kind] ?? 0
+		}))
+	);
 	const reward = $derived(combat?.reward);
 	const player = $derived(combat?.player ?? game.player);
+	const comboCount = $derived(combat?.comboCount ?? game.comboCount);
 	let sound = $state(false);
 	const showSoundOptions = false;
 	let phase = $state<'idle' | 'charging' | 'reveal'>('idle');
@@ -79,7 +94,7 @@
 	let finishWait: (() => void) | undefined;
 	const audio = createGameAudio();
 	$effect(() => {
-		if (reward?.damage && sound) audio.play(reward.critical ? 'critical' : 'hit');
+		if (reward?.damage && sound) audio.play(reward.combo ? 'combo' : 'hit');
 	});
 	onDestroy(() => {
 		alive = false;
@@ -143,14 +158,14 @@
 	<div class="status-header">
 		<div class="status-summary">
 			<div class="resource-strip" aria-label="보유 자원">
-				{#each [{ name: '골드', amount: wallet.gold }, { name: '철', amount: wallet.iron }, { name: '은', amount: wallet.silver ?? 0 }, { name: '강화석', amount: wallet.stones }] as resource (resource.name)}
+				{#each resources as resource (resource.kind)}
 					<div
 						class="resource"
 						aria-label={`${resource.name} ${resource.amount}`}
 						title={resource.name}
 					>
 						<span class="resource-icon" aria-hidden="true"
-							><ResourceIcon kind={resource.name} /></span
+							><ResourceIcon kind={resource.kind} /></span
 						>
 						<b>{resource.amount.toLocaleString()}</b>
 					</div>
@@ -171,7 +186,11 @@
 							<span class="heart" aria-hidden="true">♥</span><b>{player.hp}</b><small
 								>/ {player.maxHp}</small
 							>
-							{#if reward?.playerDamage}<b class="taken">−{reward.playerDamage}</b>{/if}
+							{#if reward?.playerDamage}
+								<b class="taken">−{reward.playerDamage}</b>
+							{:else if reward?.playerHealing}
+								<b class="restored">+{reward.playerHealing}</b>
+							{/if}
 						</div>{/key}
 				</div>
 			{/if}
@@ -203,9 +222,9 @@
 	<BattleArena {battle} {reward} eventId={combat?.revision ?? 0} />
 	{#key combat}<p class="feedback" role="status">
 			{reward?.clear
-				? `${reward.critical ? '치명타로 ' : ''}처치 성공! 보물상자를 발견했어요.`
+				? `${reward.combo ? `${reward.combo}연계! 추가 피해 +${reward.comboBonus} · ` : ''}처치 성공! 골드 +${reward.gold}${reward.iron ? ` · 철 +${reward.iron}` : ''}${reward.silver ? ` · 은 +${reward.silver}` : ''}${reward.stones ? ` · 강화석 +${reward.stones}` : ''}${reward.chest ? ' · 보물상자 발견!' : ''}`
 				: reward?.damage
-					? `${reward.critical ? '크리티컬! 2배 공격 ·' : '명중!'} 골드 +${reward.gold}`
+					? `${reward.combo ? `${reward.combo}연계! 추가 피해 +${reward.comboBonus} · ` : '명중!'}골드 +${reward.gold}`
 					: reward?.playerDamage
 						? `${reward.playerCritical ? '몬스터의 치명타! ' : '몬스터의 반격! '}체력 −${reward.playerDamage}${reward.healing ? ` · 몬스터 회복 +${reward.healing}` : ''}`
 						: reward?.healing
@@ -217,14 +236,20 @@
 			<summary>전투 정보</summary>
 			<p>탈진 전에는 체력이 1분마다 2씩 회복돼요. 탈진하면 10분간 휴식이 필요해요.</p>
 			<p>
-				공격력 {game.attack} · 치명타 {game.criticalChance.toFixed(1)}% · 오답 피해: 단어 레벨 ×{battle.boss
-					? 3
-					: 2} · 넘기기: 몬스터 회복 ×3 + 치명타 반격 (오답 피해 ×2)
+				공격력 {game.attack} · 연계율 {game.comboRate.toFixed(1)}% · 현재 연속 정답
+				{comboCount}회 · 오답 피해: 단어 레벨 ×{battle.boss ? 3 : 2} · 넘기기: 몬스터 회복 ×3 + 치명타
+				반격 (오답 피해 ×2)
 			</p>
 			<p>
 				명중 🪙 {(combat?.hitGold ?? game.hitGold ?? 1) * (battle.boss ? 2 : 1)}{battle.boss
 					? ' (보스 ×2)'
-					: ''} · 상자 ×{monsterStats(battle.level ?? 10).rewardMultiplier.toFixed(2)}
+					: ''} · 처치 상자 확률 {NORMAL_CHEST_DROP_CHANCE}% · 상자 ×{monsterStats(
+					battle.level ?? 10
+				).rewardMultiplier.toFixed(2)}
+			</p>
+			<p>
+				처치 특성: 슬라임은 골드, 버섯은 철, 박쥐는 은을 줘요. 골렘은
+				{GOLEM_STONE_DROP_CHANCE}% 확률로 강화석을 떨어뜨리고, 보스는 보물상자를 확정으로 남겨요.
 			</p>
 		</details>
 	</div>
@@ -279,7 +304,7 @@
 			{/key}
 			{#if remainingReveals > 0}
 				<button class="button secondary collect" type="button" onclick={revealNext}
-					>터치해서 {revealedCount ? '다음 보물' : '첫 보물'} 공개</button
+					>화면을 눌러 {revealedCount ? '다음 보물' : '첫 보물'} 공개</button
 				>
 			{:else}
 				<div class="collected" aria-label="획득한 보물">
@@ -305,6 +330,7 @@
 	bind:this={chestDialog}
 	class="chest-dialog"
 	class:rare={rareRevealed}
+	class:tap-reveal={phase === 'reveal' && remainingReveals > 0}
 	aria-label="보물상자 개봉"
 	oncancel={(event) => {
 		if (phase === 'charging' || remainingReveals > 0) event.preventDefault();
@@ -312,6 +338,15 @@
 	}}
 >
 	{#if phase !== 'idle'}{@render treasure()}{/if}
+	{#if phase === 'reveal' && remainingReveals > 0}
+		<button
+			class="reveal-background"
+			type="button"
+			tabindex="-1"
+			aria-label="화면을 눌러 다음 보물 공개"
+			onclick={revealNext}
+		></button>
+	{/if}
 </dialog>
 
 <style>
@@ -384,10 +419,16 @@
 	.vitality small {
 		font-size: 0.75rem;
 	}
-	.vitality .taken {
+	.vitality .taken,
+	.vitality .restored {
 		font-size: 0.85rem;
 		margin-left: 0.3rem;
+	}
+	.vitality .taken {
 		color: var(--red);
+	}
+	.vitality .restored {
+		color: #337442;
 	}
 	.heading {
 		position: relative;
@@ -486,6 +527,21 @@
 		gap: 1.4rem;
 		background: transparent;
 		overflow: hidden;
+	}
+	.reveal-background {
+		position: fixed;
+		inset: 0;
+		border: 0;
+		padding: 0;
+		background: transparent;
+		cursor: pointer;
+	}
+	.chest-dialog.tap-reveal .treasure {
+		z-index: 1;
+		pointer-events: none;
+	}
+	.chest-dialog.tap-reveal .treasure button {
+		pointer-events: auto;
 	}
 	.chest-dialog .chest {
 		scale: 1.8;

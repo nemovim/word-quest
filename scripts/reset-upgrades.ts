@@ -7,11 +7,21 @@ import mongoose from 'mongoose';
 const defaults = {
 	weapon: 0,
 	attack: 10,
-	criticalChance: 1,
+	armor: {
+		maxHp: 100,
+		maxHpUpgrades: 0,
+		killRecovery: 0,
+		killRecoveryUpgrades: 0,
+		defense: 0,
+		defenseUpgrades: 0
+	},
+	comboRate: 0,
+	comboCount: 0,
 	hitGold: 1,
 	attackUpgrades: 0,
-	criticalUpgrades: 0,
+	comboUpgrades: 0,
 	incomeUpgrades: 0,
+	successfulUpgradeCount: 0,
 	chanceUpgrades: 0,
 	upgradeFailures: 0,
 	chargeVersion: 1,
