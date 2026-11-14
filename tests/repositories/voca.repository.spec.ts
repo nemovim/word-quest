@@ -1,20 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { findMock, sortMock, limitMock, leanMock } = vi.hoisted(() => ({
+const { findMock, sortMock, limitMock, leanMock, distinctMock } = vi.hoisted(() => ({
 	findMock: vi.fn(),
 	sortMock: vi.fn(),
 	limitMock: vi.fn(),
-	leanMock: vi.fn()
+	leanMock: vi.fn(),
+	distinctMock: vi.fn()
 }));
 
 vi.mock('$lib/models/voca.model', () => ({
 	default: {
-		find: findMock
+		find: findMock,
+		distinct: distinctMock
 	}
 }));
 
 import {
 	buildTargetTextSearch,
+	findPermanentlyExcludedVocaIds,
 	findVocasBySourceText,
 	normalizeSourceText,
 	normalizeTargetText
@@ -28,6 +31,32 @@ describe('voca.repository', () => {
 		limitMock.mockReturnValue({ lean: leanMock });
 		findMock.mockReturnValue({ sort: sortMock });
 		leanMock.mockResolvedValue([]);
+	});
+
+	it('excludes low-utility and deferred scores from due reviews', async () => {
+		distinctMock.mockResolvedValueOnce(['excluded-id']);
+		expect(await findPermanentlyExcludedVocaIds()).toEqual(['excluded-id']);
+		expect(distinctMock).toHaveBeenCalledWith('_id', {
+			$or: [
+				{ quizExcludedByReportId: { $exists: true } },
+				{ utilityScore: { $type: 'number', $lt: 2 } },
+				{ scoreEvaluationDeferred: true }
+			]
+		});
+	});
+
+	it('limits exclusion checks to the supplied words', async () => {
+		distinctMock.mockResolvedValueOnce(['excluded-id']);
+		expect(await findPermanentlyExcludedVocaIds(['excluded-id', 'allowed-id'])).toEqual([
+			'excluded-id'
+		]);
+		expect(distinctMock).toHaveBeenCalledWith(
+			'_id',
+			expect.objectContaining({ _id: { $in: ['excluded-id', 'allowed-id'] } })
+		);
+		distinctMock.mockClear();
+		expect(await findPermanentlyExcludedVocaIds([])).toEqual([]);
+		expect(distinctMock).not.toHaveBeenCalled();
 	});
 
 	it('normalizes Korean source text with trimmed whitespace', () => {

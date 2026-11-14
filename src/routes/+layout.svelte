@@ -65,10 +65,16 @@
 				<a
 					class="post-it admin-link"
 					href={resolve('/admin/reports')}
-					aria-current={page.url.pathname.startsWith('/admin') ? 'page' : undefined}
+					aria-current={page.url.pathname.startsWith('/admin/reports') ? 'page' : undefined}
 				>
 					신고 관리
 				</a>
+				<a
+					class="post-it admin-link"
+					href={resolve('/admin/examples')}
+					aria-current={page.url.pathname.startsWith('/admin/examples') ? 'page' : undefined}
+					>보류 예문</a
+				>
 			{/if}
 		</nav>
 	</header>

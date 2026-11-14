@@ -20,6 +20,6 @@ describe('OpenRouter model configuration', () => {
 	it('uses the shared default when the model is empty', () => {
 		env.OPENROUTER_MODEL = '   ';
 
-		expect(getOpenRouterModel()).toBe('mistralai/mistral-small-2603');
+		expect(getOpenRouterModel()).toBe('openai/gpt-6-luna');
 	});
 });

@@ -41,6 +41,7 @@ const vocaSchema = new mongoose.Schema({
 	},
 	scoreReviewCount: { type: Number, required: true, default: 0, min: 0, max: 2 },
 	scoreEvaluatedAt: { type: Date, required: false, default: null },
+	scoreEvaluationDeferred: { type: Boolean, required: false, default: false },
 	quizExcludedByReportId: { type: String, required: false }
 });
 

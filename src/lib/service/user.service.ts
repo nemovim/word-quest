@@ -17,6 +17,7 @@ import {
 import { clampNumber, roundTo2 } from '$lib/shared/utils/general.util';
 
 const LEVEL_SAMPLE_LIMIT = 500;
+const MIN_VOCABULARY_LEVEL = 0;
 const LEVEL_SEARCH_ITERATIONS = 16;
 const LEVEL_PROBABILITY_SCALE = 1.25;
 const LEVEL_PRIOR_WEIGHT = 0.5;
@@ -24,7 +25,7 @@ const LEVEL_MASTERY_BASELINE = 0.8;
 const LEVEL_MASTERY_BASELINE_LOGIT = Math.log(
 	LEVEL_MASTERY_BASELINE / (1 - LEVEL_MASTERY_BASELINE)
 );
-const MASTERY_BY_STAGE = [0, 0.2, 0.4, 0.6, 0.75, 0.78, 0.8, 0.81] as const;
+const MASTERY_BY_STAGE = [0, 0.2, 0.5, 0.7, 0.8, 0.85, 0.88, 0.9] as const;
 type VocaDifficulty = Pick<Voca, '_id' | 'difficultyLevel'>;
 
 function shouldAppendLevelHistory(currentUser: User, now: Date): boolean {
@@ -52,11 +53,6 @@ function seedOrAppendLevelHistory(currentUser: User, nextLevel: number, now: Dat
 		...currentUser,
 		levelHistory: [...currentUser.levelHistory, { level: nextLevel, recordedAt: now.toISOString() }]
 	};
-}
-
-function getStageMastery(reviewStage: number): number {
-	const stageIndex = Math.trunc(clampNumber(reviewStage, 0, MAX_REVIEW_STAGE));
-	return MASTERY_BY_STAGE[stageIndex] ?? 0;
 }
 
 export function selectRecentLevelReviews<T extends LevelReview>(
@@ -101,7 +97,15 @@ export function calculateVocabularyLevel(reviews: LevelReview[], vocas: VocaDiff
 
 		return difficultyLevel == null
 			? []
-			: [{ difficultyLevel, mastery: getStageMastery(currentReview.reviewStage) }];
+			: [
+					{
+						difficultyLevel,
+						mastery:
+							MASTERY_BY_STAGE[
+								Math.trunc(clampNumber(currentReview.reviewStage, 0, MAX_REVIEW_STAGE))
+							] ?? 0
+					}
+				];
 	});
 
 	if (samples.length === 0) {
@@ -117,15 +121,15 @@ export function calculateVocabularyLevel(reviews: LevelReview[], vocas: VocaDiff
 			LEVEL_PRIOR_WEIGHT * (level - MIN_LEVEL)
 		);
 
-	if (getLossDerivative(MIN_LEVEL) >= 0) {
-		return MIN_LEVEL;
+	if (getLossDerivative(MIN_VOCABULARY_LEVEL) >= 0) {
+		return MIN_VOCABULARY_LEVEL;
 	}
 
 	if (getLossDerivative(MAX_LEVEL) <= 0) {
 		return MAX_LEVEL;
 	}
 
-	let lowerLevel = MIN_LEVEL;
+	let lowerLevel = MIN_VOCABULARY_LEVEL;
 	let upperLevel = MAX_LEVEL;
 
 	for (let iteration = 0; iteration < LEVEL_SEARCH_ITERATIONS; iteration += 1) {
@@ -138,7 +142,7 @@ export function calculateVocabularyLevel(reviews: LevelReview[], vocas: VocaDiff
 		}
 	}
 
-	return roundTo2(clampNumber((lowerLevel + upperLevel) / 2, MIN_LEVEL, MAX_LEVEL));
+	return roundTo2(clampNumber((lowerLevel + upperLevel) / 2, MIN_VOCABULARY_LEVEL, MAX_LEVEL));
 }
 
 export async function getOrCreateUser(userId: string, email: string, name: string): Promise<User> {

@@ -27,12 +27,11 @@ import {
 	COMBO_RATE_CAP,
 	RESOURCE_YIELD_UPGRADE_COST,
 	rebirthCost,
-	availableUpgradeLimit,
 	GOLEM_STONE_DROP_CHANCE,
 	NORMAL_CHEST_DROP_CHANCE,
 	CHEST_STONE_GOLD_DIVISOR,
-	successfulUpgradeLimit,
 	UPGRADE_GAINS,
+	availableUpgradeLimit,
 	vocabularyUpgradeLimit
 } from '$lib/shared/utils/game.util';
 
@@ -103,39 +102,66 @@ describe('game progression', () => {
 		}
 	});
 
-	it('caps upgrades and rebirth eligibility at vocabulary level times ten', async () => {
-		expect(successfulUpgradeLimit(0)).toBe(10);
-		expect(successfulUpgradeLimit(1)).toBe(11);
+	it('requires both vocabulary level and rebirth progression for upgrades and rebirth', async () => {
+		expect(vocabularyUpgradeLimit(0)).toBe(0);
+		expect(vocabularyUpgradeLimit(0.5)).toBe(5);
 		expect(vocabularyUpgradeLimit(1)).toBe(10);
 		expect(vocabularyUpgradeLimit(1.09)).toBe(10);
 		expect(vocabularyUpgradeLimit(1.1)).toBe(11);
-		expect(availableUpgradeLimit(1, 1)).toBe(10);
-		expect(availableUpgradeLimit(1.1, 1)).toBe(11);
+		expect(availableUpgradeLimit(0.5, 0)).toBe(5);
+		expect(availableUpgradeLimit(1.19, 1)).toBe(11);
+		expect(availableUpgradeLimit(1.3, 0)).toBe(10);
+		expect(availableUpgradeLimit(1.3, 1)).toBe(11);
+		expect(availableUpgradeLimit(1.3, 3)).toBe(13);
+		expect(availableUpgradeLimit(1.3, 4)).toBe(13);
 
 		await loadGame(user);
 		await rewardStudy(user, 'initialize-level-gate');
+		await expect(actionAs({ ...user, currentLevel: 0 }, 'upgrade')).rejects.toMatchObject({
+			status: 400
+		});
+		await expect(actionAs({ ...user, currentLevel: 0 }, 'rebirth')).rejects.toMatchObject({
+			status: 400
+		});
+		const level13 = { ...user, currentLevel: 1.3 };
 		Object.assign(stored.state, {
-			rebirthCount: 1,
 			successfulUpgradeCount: 10,
-			gold: 2000,
-			iron: 200,
-			silver: 100,
-			stones: 10
+			gold: 25000,
+			iron: 1500,
+			silver: 500,
+			stones: 50
 		});
-		await expect(action('upgrade')).rejects.toMatchObject({ status: 400 });
-		stored.state.successfulUpgradeCount = 11;
-		await expect(action('rebirth')).rejects.toMatchObject({ status: 400 });
-		expect(stored.state.rebirthCount).toBe(1);
-		expect(stored.state.gold).toBe(2000);
-
-		const result = await actionAs({ ...user, currentLevel: 1.1 }, 'rebirth');
-		expect(result.message).toContain('환생 2회 완료');
-		expect(stored.state).toMatchObject({
-			rebirthCount: 2,
-			successfulUpgradeCount: 0,
-			memoryShards: 2,
-			gold: 0
+		await expect(actionAs(level13, 'upgrade')).rejects.toMatchObject({ status: 400 });
+		await actionAs(level13, 'upgrade', 'word', 'chance');
+		expect(stored.state.successfulUpgradeCount).toBe(10);
+		await expect(actionAs({ ...user, currentLevel: 0.9 }, 'rebirth')).rejects.toMatchObject({
+			status: 400
 		});
+		expect((await actionAs(level13, 'rebirth')).message).toContain('환생 1회 완료');
+		Object.assign(stored.state, {
+			rebirthCount: 3,
+			successfulUpgradeCount: 13,
+			gold: 25000,
+			iron: 1500,
+			silver: 500,
+			stones: 50
+		});
+		expect((await actionAs(level13, 'rebirth')).message).toContain('환생 4회 완료');
+		Object.assign(stored.state, {
+			successfulUpgradeCount: 13,
+			gold: 25000,
+			iron: 1500,
+			silver: 500,
+			stones: 50
+		});
+		await expect(actionAs(level13, 'rebirth')).rejects.toMatchObject({ status: 400 });
+		await expect(actionAs({ ...user, currentLevel: 1.4 }, 'rebirth')).rejects.toMatchObject({
+			status: 400
+		});
+		stored.state.successfulUpgradeCount = 14;
+		expect((await actionAs({ ...user, currentLevel: 1.4 }, 'rebirth')).message).toContain(
+			'환생 5회 완료'
+		);
 	});
 
 	it('upgrades a chosen resource yield for increasing shard costs', async () => {
@@ -178,17 +204,17 @@ describe('game progression', () => {
 		await expect(action('upgrade')).rejects.toMatchObject({ status: 400 });
 
 		Object.assign(stored.state, {
-			gold: 1000,
-			iron: 100,
-			silver: 50,
-			stones: 5,
+			gold: 5000,
+			iron: 300,
+			silver: 100,
+			stones: 10,
 			memoryShards: 3,
 			resourceYield: { gold: 12.5, iron: 2, silver: 3, stones: 4 },
 			resourceYieldUpgrades: { gold: 2, iron: 1, silver: 0, stones: 3 }
 		});
 		stored.state.battle.chests = [{ id: 'rebirth-chest', boss: false, level: 10 }];
-		expect(rebirthCost(1)).toEqual({ gold: 1000, iron: 100, silver: 50, stones: 5 });
-		expect(rebirthCost(2)).toEqual({ gold: 2000, iron: 200, silver: 100, stones: 10 });
+		expect(rebirthCost(1)).toEqual({ gold: 5000, iron: 300, silver: 100, stones: 10 });
+		expect(rebirthCost(2)).toEqual({ gold: 10000, iron: 600, silver: 200, stones: 20 });
 
 		const result = await action('rebirth');
 		expect(result.message).toContain('환생 1회 완료');

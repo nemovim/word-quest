@@ -15,6 +15,7 @@ function inflections(word: string, partOfSpeech: string): Set<string> {
 	}
 
 	if (partOfSpeech === 'verb') {
+		if (word === 'become') forms.add('became');
 		forms.add(`${word}ed`);
 		forms.add(`${word}ing`);
 

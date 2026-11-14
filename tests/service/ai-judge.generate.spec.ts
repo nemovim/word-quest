@@ -1,21 +1,38 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { sendOpenRouterJsonMock } = vi.hoisted(() => ({
-	sendOpenRouterJsonMock: vi.fn()
-}));
+const { sendOpenRouterJsonMock, scoreVocaWithDecisionModelMock, reviewExampleWithLunaMock } =
+	vi.hoisted(() => ({
+		sendOpenRouterJsonMock: vi.fn(),
+		scoreVocaWithDecisionModelMock: vi.fn(),
+		reviewExampleWithLunaMock: vi.fn()
+	}));
 
 vi.mock('$lib/server/openrouter', () => ({
 	sendOpenRouterJson: sendOpenRouterJsonMock
 }));
+vi.mock('$lib/server/decision-voca-scoring', () => ({
+	scoreVocaWithDecisionModel: scoreVocaWithDecisionModelMock
+}));
+vi.mock('$lib/server/example-luna-review', () => ({
+	reviewExamplesWithLuna: (inputs: unknown[]) =>
+		Promise.all(inputs.map(() => reviewExampleWithLunaMock()))
+}));
+vi.mock('$lib/server/deferred-example', () => ({
+	queueDeferredExample: vi.fn().mockResolvedValue('pending-id')
+}));
 
-import { generateQuizCardSeed, validateCustomVocaInput } from '$lib/service/ai-judge.service';
+import {
+	buildQuizCardCreate,
+	generateQuizCardSeed,
+	validateCustomVocaInput
+} from '$lib/service/ai-judge.service';
 import { LANGUAGE_CODES } from '$lib/shared/types/general.type';
 import { PARTS_OF_SPEECH } from '$lib/shared/types/voca.type';
 
 const HANGUL_APPLE = '애플';
 const HANGUL_FRUIT = '사과';
 
-function makeValidSeed(pronunciationText = HANGUL_APPLE) {
+function makeValidSeed() {
 	return {
 		difficultyLevel: 4,
 		utilityScore: 4,
@@ -25,14 +42,12 @@ function makeValidSeed(pronunciationText = HANGUL_APPLE) {
 					{
 						languageCode: LANGUAGE_CODES.KO,
 						fullSentence: '내가 어제 사과를 적었다.',
-						answerSurface: HANGUL_FRUIT,
-						pronunciationText: HANGUL_FRUIT
+						answerSurface: HANGUL_FRUIT
 					},
 					{
 						languageCode: LANGUAGE_CODES.EN,
 						fullSentence: 'I wrote apple yesterday.',
-						answerSurface: 'apple',
-						pronunciationText
+						answerSurface: 'apple'
 					}
 				]
 			}
@@ -44,6 +59,75 @@ describe('ai-judge.service generate prompt', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		sendOpenRouterJsonMock.mockResolvedValue(makeValidSeed());
+		scoreVocaWithDecisionModelMock.mockResolvedValue({ difficultyLevel: 2, utilityScore: 5 });
+		reviewExampleWithLunaMock.mockResolvedValue({
+			accepted: true,
+			targetPronunciation: HANGUL_APPLE
+		});
+	});
+
+	it('rejects examples when Luna does not approve them', async () => {
+		reviewExampleWithLunaMock.mockResolvedValue({ accepted: false });
+		await expect(
+			generateQuizCardSeed({
+				sourceText: '사과',
+				sourceDefinition: '과일',
+				partOfSpeech: PARTS_OF_SPEECH.NOUN,
+				targetLang: LANGUAGE_CODES.EN,
+				targetText: 'apple',
+				targetDefinition: 'fruit'
+			})
+		).rejects.toThrow('예문 생성에 실패했어요.');
+		expect(scoreVocaWithDecisionModelMock).not.toHaveBeenCalled();
+	});
+
+	it('holds the draft when the example review remains uncertain', async () => {
+		reviewExampleWithLunaMock.mockResolvedValue({ accepted: false, status: 'deferred' });
+		await expect(
+			generateQuizCardSeed({
+				sourceText: '사과',
+				sourceDefinition: '과일',
+				partOfSpeech: PARTS_OF_SPEECH.NOUN,
+				targetLang: LANGUAGE_CODES.EN,
+				targetText: 'apple',
+				targetDefinition: 'fruit'
+			})
+		).rejects.toThrow('확실');
+		expect(scoreVocaWithDecisionModelMock).not.toHaveBeenCalled();
+	});
+
+	it('uses decision-model scores for a generated vocabulary item', async () => {
+		const input = {
+			sourceText: '사과',
+			sourceDefinition: '과일',
+			partOfSpeech: PARTS_OF_SPEECH.NOUN,
+			targetLang: LANGUAGE_CODES.EN,
+			targetText: 'apple',
+			targetDefinition: 'a kind of fruit'
+		};
+		const seed = await generateQuizCardSeed(input);
+		expect(scoreVocaWithDecisionModelMock).toHaveBeenCalledWith(input);
+		expect(seed).toMatchObject({ difficultyLevel: 2, utilityScore: 5 });
+	});
+
+	it('keeps the selected pronunciation in the generated seed and saved card payload', async () => {
+		reviewExampleWithLunaMock.mockResolvedValue({
+			accepted: true,
+			targetPronunciation: '애플',
+			targetPronunciationArpabet: 'AE1 P AH0 L'
+		});
+		const input = {
+			sourceText: '사과',
+			sourceDefinition: '과일',
+			partOfSpeech: PARTS_OF_SPEECH.NOUN,
+			targetLang: LANGUAGE_CODES.EN,
+			targetText: 'apple',
+			targetDefinition: 'fruit'
+		};
+		const seed = await generateQuizCardSeed(input);
+		expect(buildQuizCardCreate('voca-id', LANGUAGE_CODES.EN, seed).examples[0]).toMatchObject({
+			targetPronunciationArpabet: 'AE1 P AH0 L'
+		});
 	});
 
 	it('includes source and target definitions and requests fullSentence + answerSurface', async () => {
@@ -64,10 +148,7 @@ describe('ai-judge.service generate prompt', () => {
 		expect(request?.schema?.required).toEqual(['difficultyLevel', 'utilityScore', 'examples']);
 		expect(textProperties?.fullSentence).toEqual({ type: 'string' });
 		expect(textProperties?.answerSurface).toEqual({ type: 'string' });
-		expect(textProperties?.pronunciationText).toEqual({
-			type: 'string',
-			pattern: '^[가-힣ㄱ-ㅣ0-9\\s.,!?()\\-~]+$'
-		});
+		expect(textProperties?.pronunciationText).toBeUndefined();
 		expect(request?.messages[0]?.content).toContain('Return fullSentence with no {{---}}.');
 		expect(request?.messages[0]?.content).toContain(
 			'Return answerSurface as the exact substring to hide from fullSentence.'
@@ -94,10 +175,7 @@ describe('ai-judge.service generate prompt', () => {
 		expect(request?.messages[0]?.content).toContain(
 			'rewrite the whole context instead of replacing the headword'
 		);
-		expect(request?.messages[0]?.content).toContain(
-			'pronunciationText MUST be a Hangul phonetic transcription (appropriate→어프로프리엇)'
-		);
-		expect(request?.messages[0]?.content).toContain('NEVER copy the original script or use IPA');
+		expect(request?.messages[0]?.content).not.toContain('pronunciationText');
 		expect(userPrompt).toContain('sourceText:source-word');
 		expect(userPrompt).toContain('sourceDefinition:source definition');
 		expect(userPrompt).toContain('sourcePartOfSpeech:noun');
@@ -126,7 +204,9 @@ describe('ai-judge.service generate prompt', () => {
 	});
 
 	it('retries when every generated example is invalid', async () => {
-		sendOpenRouterJsonMock.mockResolvedValue(makeValidSeed('apple'));
+		const invalidSeed = makeValidSeed();
+		invalidSeed.examples[0].texts[1].answerSurface = 'missing';
+		sendOpenRouterJsonMock.mockResolvedValue(invalidSeed);
 
 		await expect(
 			generateQuizCardSeed({
@@ -142,10 +222,10 @@ describe('ai-judge.service generate prompt', () => {
 		expect(sendOpenRouterJsonMock).toHaveBeenCalledTimes(2);
 	});
 
-	it('keeps valid examples when another generated example has an invalid pronunciation', async () => {
+	it('keeps valid examples when another generated example has an invalid answer span', async () => {
 		const validSeed = makeValidSeed();
 		const invalidExample = structuredClone(validSeed.examples[0]!);
-		invalidExample.texts[1].pronunciationText = 'apple';
+		invalidExample.texts[1].answerSurface = 'missing';
 		sendOpenRouterJsonMock.mockResolvedValueOnce({
 			...validSeed,
 			examples: [...validSeed.examples, invalidExample]

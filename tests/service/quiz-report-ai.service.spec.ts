@@ -9,7 +9,8 @@ import { makeQuizExample, makeVoca } from '../helpers/factories';
 import {
 	buildQuizReportRepairPlan,
 	buildQuizReportVocaSnapshot,
-	createQuizReportProposal
+	createQuizReportProposal,
+	normalizeQuizReportExampleDraft
 } from '$lib/service/quiz-report-ai.service';
 import {
 	QUIZ_REPORT_ISSUES,
@@ -48,6 +49,26 @@ function aiProposal(pronunciationText = '애플') {
 
 describe('quiz-report-ai.service', () => {
 	beforeEach(() => vi.clearAllMocks());
+
+	it('preserves pronunciation metadata only while the English context and Hangul remain unchanged', () => {
+		const current = makeQuizExample({
+			sourceSentenceTemplate: '나는 {{---}}를 먹었다.',
+			sourceFillText: '사과',
+			targetSentenceTemplate: 'I ate an {{---}}.',
+			targetFillText: 'apple',
+			targetPronunciationText: '애플',
+			targetPronunciationArpabet: 'AE1 P AH0 L'
+		});
+		expect(normalizeQuizReportExampleDraft(current, 'en', current)).toMatchObject({
+			targetPronunciationArpabet: 'AE1 P AH0 L'
+		});
+		const changed = normalizeQuizReportExampleDraft(
+			{ ...current, targetPronunciationText: '애뻘' },
+			'en',
+			current
+		);
+		expect(changed.targetPronunciationArpabet).toBeUndefined();
+	});
 
 	it('merges issue routes without duplicate mutable fields', () => {
 		expect(

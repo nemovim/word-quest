@@ -28,7 +28,7 @@ import {
 	isUpgradeKind,
 	isResourceYieldKind,
 	rebirthCost,
-	successfulUpgradeLimit,
+	rebirthUpgradeTarget,
 	upgradeChance,
 	upgradeCost,
 	vocabularyUpgradeLimit
@@ -93,11 +93,8 @@ async function actGameLocked(
 		const kind = form.get('kind');
 		if (!isUpgradeKind(kind)) error(400, '강화할 항목을 선택해 주세요.');
 		const allowedUpgrades = availableUpgradeLimit(user.currentLevel, state.rebirthCount);
-		if (state.successfulUpgradeCount >= allowedUpgrades) {
-			const upgradeLimit = successfulUpgradeLimit(state.rebirthCount);
-			if (vocabularyUpgradeLimit(user.currentLevel) < upgradeLimit)
-				error(400, `어휘 레벨 ${(upgradeLimit / 10).toFixed(1)} 이상부터 강화 한도가 늘어요.`);
-			error(400, '강화 한도에 도달했어요. 자원을 모아 환생해 주세요.');
+		if (kind !== 'chance' && state.successfulUpgradeCount >= allowedUpgrades) {
+			error(400, '강화 한도에 도달했어요. 환생하거나 어휘 레벨을 올려 주세요.');
 		}
 		if (kind !== 'chance' && state.successRate <= 0)
 			error(400, '골드로 강화 성공률을 먼저 충전해 주세요.');
@@ -200,12 +197,12 @@ async function actGameLocked(
 		message = `${RESOURCE_YIELD_NAMES[resource]} 획득량 +${increase.toFixed(1)}%p → ${state.resourceYield[resource].toFixed(1)}%`;
 	} else if (action === 'rebirth') {
 		const nextRebirth = state.rebirthCount + 1;
-		const upgradeLimit = successfulUpgradeLimit(state.rebirthCount);
 		const vocabularyLimit = vocabularyUpgradeLimit(user.currentLevel);
-		if (vocabularyLimit < upgradeLimit)
-			error(400, `어휘 레벨 ${(upgradeLimit / 10).toFixed(1)} 이상이어야 환생할 수 있어요.`);
-		if (state.successfulUpgradeCount < upgradeLimit)
-			error(400, `성공 강화 ${upgradeLimit}회를 달성해야 환생할 수 있어요.`);
+		const target = rebirthUpgradeTarget(state.rebirthCount);
+		if (vocabularyLimit < target)
+			error(400, `어휘 레벨 ${(target / 10).toFixed(1)} 이상이어야 환생할 수 있어요.`);
+		if (state.successfulUpgradeCount < target)
+			error(400, `성공 강화 ${target}회를 달성해야 환생할 수 있어요.`);
 		const cost = rebirthCost(nextRebirth);
 		if (!Object.values(cost).every(Number.isFinite))
 			error(400, '환생 횟수가 너무 많아 진행할 수 없어요.');

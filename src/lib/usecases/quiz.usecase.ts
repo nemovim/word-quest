@@ -19,6 +19,7 @@ import {
 	findDueReviewGroupsByUser,
 	findRecentDistinctAnsweredReviews,
 	findReviewByUserAndVoca,
+	findReviewVocaIdsByUser,
 	findReviewedVocaIdsByUserDirection,
 	upsertReview
 } from '$lib/repositories/review.repository';
@@ -29,6 +30,10 @@ import {
 	getVocaById,
 	updateVocaDifficultyIfCurrent
 } from '$lib/repositories/voca.repository';
+import {
+	lookupCmuPronunciations,
+	storedCmuPronunciationToIpa
+} from '$lib/server/cmu-pronunciation';
 import { judgeAnswer } from '$lib/service/ai-judge.service';
 import { findCachedJudge, saveJudgeResult } from '$lib/service/answer-memo.service';
 import { rebuildUserLevel, saveUser } from '$lib/service/user.service';
@@ -37,6 +42,7 @@ import {
 	DEFAULT_QUIZ_SESSION_SIZE,
 	KOREAN_LANGUAGE_CODE,
 	LANGUAGE_CODES,
+	MIN_RECOMMENDED_UTILITY_SCORE,
 	QUIZ_DIRECTION_MODES,
 	type LanguageCode,
 	type QuizDirectionMode
@@ -90,6 +96,7 @@ type QuizSolvedFeedback = {
 	hintText: string;
 	correctAnswer: string;
 	pronunciationText: string;
+	pronunciationIpa?: string;
 	reviewStage: number;
 	nextReviewLabel: string;
 };
@@ -260,7 +267,8 @@ function buildSolvedFeedback(
 	status: 'correct' | 'pass',
 	currentEncounter: QuizEncounter,
 	nextReview: Review,
-	correctAnswer: string
+	correctAnswer: string,
+	pronunciationIpa?: string
 ): QuizSolvedFeedback {
 	return {
 		status,
@@ -268,9 +276,22 @@ function buildSolvedFeedback(
 		hintText: status === 'correct' ? QUIZ_FEEDBACK_HINTS.CORRECT : QUIZ_FEEDBACK_HINTS.PASS,
 		correctAnswer,
 		pronunciationText: currentEncounter.pronunciationText,
+		...(pronunciationIpa ? { pronunciationIpa } : {}),
 		reviewStage: nextReview.reviewStage,
 		nextReviewLabel: getReviewStageLabel(nextReview.reviewStage)
 	};
+}
+
+function getEnglishPronunciationIpa(currentVoca: Voca, example: QuizExample): string | undefined {
+	if (currentVoca.targetLang !== LANGUAGE_CODES.EN) return undefined;
+	if (example.targetPronunciationArpabet != null)
+		return storedCmuPronunciationToIpa(example.targetPronunciationArpabet);
+	// Older examples have no saved selection. A dictionary lookup is safe only
+	// when every word has exactly one candidate; never guess between variants.
+	const lookup = lookupCmuPronunciations(example.targetFillText);
+	if (lookup.missing.length || lookup.words.some((word) => word.candidates.length !== 1))
+		return undefined;
+	return storedCmuPronunciationToIpa(lookup.words.map((word) => word.candidates[0]).join(' | '));
 }
 
 async function refreshUserLevel(currentUser: User, now: Date): Promise<User> {
@@ -411,10 +432,11 @@ export async function loadQuizPage(
 	const now = new Date();
 	const directionField =
 		directionMode === QUIZ_DIRECTION_MODES.TARGET_TO_KO ? 'answerLang' : 'promptLang';
-	const [pendingReportedVocaIds, permanentlyExcludedVocaIds] = await Promise.all([
+	const [pendingReportedVocaIds, reviewVocaIds] = await Promise.all([
 		findPendingReportedVocaIds(),
-		findPermanentlyExcludedVocaIds()
+		findReviewVocaIdsByUser(currentUser._id)
 	]);
+	const permanentlyExcludedVocaIds = await findPermanentlyExcludedVocaIds(reviewVocaIds);
 	const unavailableVocaIds = [...pendingReportedVocaIds, ...permanentlyExcludedVocaIds];
 	const dueReviewGroups = await findDueReviewGroupsByUser(
 		currentUser._id,
@@ -425,13 +447,15 @@ export async function loadQuizPage(
 		unavailableVocaIds
 	);
 	const reviewed = dueReviewGroups.reviewed.slice(0, DEFAULT_QUIZ_SESSION_SIZE);
-	const queuedNew = dueReviewGroups.new.slice(0, DEFAULT_QUIZ_SESSION_SIZE - reviewed.length);
-	const availableReviews = [...reviewed, ...queuedNew];
+	const hasDueReviews = reviewed.length > 0;
+	const availableReviews = hasDueReviews
+		? reviewed
+		: dueReviewGroups.new.slice(0, DEFAULT_QUIZ_SESSION_SIZE);
 	const dueVocaIds = Array.from(new Set(availableReviews.map((reviewItem) => reviewItem.vocaId)));
 	const [dueQuizCards, dueVocas, reviewedVocaIds] = await Promise.all([
 		dueVocaIds.length === 0 ? [] : findQuizCardsByVocaIds(dueVocaIds),
 		dueVocaIds.length === 0 ? [] : findVocaByIds(dueVocaIds),
-		availableReviews.length < DEFAULT_QUIZ_SESSION_SIZE
+		!hasDueReviews && availableReviews.length < DEFAULT_QUIZ_SESSION_SIZE
 			? findReviewedVocaIdsByUserDirection(currentUser._id, directionField, KOREAN_LANGUAGE_CODE)
 			: null
 	]);
@@ -472,7 +496,7 @@ export async function loadQuizPage(
 
 	const candidateLimit = DEFAULT_QUIZ_SESSION_SIZE - encounters.length;
 	let candidates: Awaited<ReturnType<typeof findNewQuizCandidates>> = [];
-	if (candidateLimit > 0) {
+	if (!hasDueReviews && candidateLimit > 0) {
 		const knownVocaIds =
 			reviewedVocaIds ??
 			(await findReviewedVocaIdsByUserDirection(
@@ -537,7 +561,13 @@ async function recordQuizResult(
 	correctAnswerText: string,
 	now: Date
 ): Promise<QuizSolvedFeedback> {
-	if ('quizExcludedByReportId' in currentVoca || (await hasPendingReportForVoca(request.vocaId))) {
+	if (
+		'quizExcludedByReportId' in currentVoca ||
+		(currentVoca.utilityScore != null &&
+			currentVoca.utilityScore < MIN_RECOMMENDED_UTILITY_SCORE) ||
+		currentVoca.scoreEvaluationDeferred ||
+		(await hasPendingReportForVoca(request.vocaId))
+	) {
 		throw new Error('신고 처리 중이거나 퀴즈에서 제외된 단어는 학습 기록에 저장할 수 없습니다.');
 	}
 
@@ -560,7 +590,13 @@ async function recordQuizResult(
 
 	await refreshUserLevel(request.user, now);
 
-	return buildSolvedFeedback(result, currentEncounter, savedReview, correctAnswerText);
+	return buildSolvedFeedback(
+		result,
+		currentEncounter,
+		savedReview,
+		correctAnswerText,
+		getEnglishPronunciationIpa(currentVoca, currentExample)
+	);
 }
 
 export async function checkQuizAnswer(
@@ -616,10 +652,12 @@ export async function checkQuizAnswer(
 }
 
 export async function revealQuizAnswer(request: QuizTarget) {
-	const { currentExample, correctAnswerText } = await loadQuizTargetContext(request);
+	const { currentVoca, currentExample, correctAnswerText } = await loadQuizTargetContext(request);
+	const pronunciationIpa = getEnglishPronunciationIpa(currentVoca, currentExample);
 	return {
 		correctAnswer: correctAnswerText,
-		pronunciationText: getQuizExampleText(currentExample, request.answerLang).pronunciationText
+		pronunciationText: getQuizExampleText(currentExample, request.answerLang).pronunciationText,
+		...(pronunciationIpa ? { pronunciationIpa } : {})
 	};
 }
 

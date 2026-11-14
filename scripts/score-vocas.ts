@@ -1,15 +1,16 @@
 import { appendFile } from 'node:fs/promises';
 
-import { OpenRouter } from '@openrouter/sdk';
 import mongoose from 'mongoose';
 
+import { nextBatchSize, readScoringOptions, scoreFilter, type ScoreMode } from './batch-options.ts';
 import { createLogFile } from './log-file.ts';
-import { getOpenRouterModel } from '../src/lib/server/openrouter-config.ts';
+import {
+	scoreVocaWithDecisionModel,
+	UncertainVocaScoreError
+} from '../src/lib/server/decision-voca-scoring.ts';
 import { decodeHtmlEntities } from '../src/lib/shared/utils/html-entity.util.ts';
 
-const HEADWORD_BATCH_SIZE = 100;
-const MAX_AI_ATTEMPTS = 5;
-const INITIAL_AI_RETRY_DELAY_MS = 2_000;
+const BATCH_SIZE = 100;
 
 type VocaForScoring = {
 	_id: mongoose.Types.ObjectId;
@@ -19,21 +20,11 @@ type VocaForScoring = {
 	partOfSpeech: string;
 	targetText: string;
 	targetDefinition: string;
+	targetLang: string;
+	difficultyLevel?: number | null;
 	utilityScore?: number | null;
 	scoreEvaluatedAt?: Date | null;
-};
-
-type ScoreMode = 'missing' | 'zero' | 'all';
-
-type HeadwordContext = {
-	sourceText: string;
-	senses: Array<{
-		sourceDefinition: string;
-		partOfSpeech: string;
-		targetText: string;
-		targetDefinition: string;
-		utilityScore: number | null;
-	}>;
+	scoreEvaluationDeferred?: boolean;
 };
 
 type Score = {
@@ -43,18 +34,7 @@ type Score = {
 	englishUsage: number;
 	isValid: number;
 	utilityScore: number;
-};
-
-type AiScore = [
-	index: number,
-	difficultyLevel: number,
-	koreanUsage: number,
-	englishUsage: number,
-	isValid: number
-];
-
-type ScoreResponse = {
-	scores: unknown[];
+	previous: VocaForScoring;
 };
 
 type ScoreDistribution = Record<string, number>;
@@ -68,7 +48,7 @@ type RunStatistics = {
 	utilityScores: ScoreDistribution;
 };
 
-function requireEnvironment(name: 'MONGO_URI' | 'OPENROUTER_API_KEY'): string {
+function requireEnvironment(name: 'MONGO_URI'): string {
 	const value = process.env[name]?.trim();
 
 	if (value == null || value === '') {
@@ -78,312 +58,78 @@ function requireEnvironment(name: 'MONGO_URI' | 'OPENROUTER_API_KEY'): string {
 	return value;
 }
 
-function readJsonContent(content: unknown): string {
-	if (typeof content === 'string') {
-		return content;
-	}
-
-	if (Array.isArray(content)) {
-		return content
-			.map((item) =>
-				typeof item === 'object' && item != null && 'text' in item && typeof item.text === 'string'
-					? item.text
-					: ''
-			)
-			.join('');
-	}
-
-	return '';
-}
-
-function buildScoringCriteriaPrompt(): string {
-	return [
-		'Score each Korean-to-English vocabulary sense for a Korean learner studying English.',
-		'Set isValid to 1 only when targetText is a correct and natural translation of the exact source sense described by sourceDefinition, partOfSpeech, and targetDefinition and is suitable as a standalone vocabulary-quiz answer; otherwise set isValid to 0.',
-		'Explanatory paraphrases and transliterations that are not established English expressions are unsuitable. Established loanwords and lexicalized multiword expressions are valid.',
-		'Separately score koreanUsage for the exact Korean sourceText sense and englishUsage for the exact English targetText sense. Judge the supplied senses, not the overall familiarity of the headwords or their other meanings.',
-		'Korean-side usage measures active usage: how often modern Korean speakers naturally choose sourceText to express the exact meaning in sourceDefinition in current speech or writing. Do not substitute the frequency or familiarity of the underlying concept.',
-		'Mere recognizability or easy comprehension must not raise koreanUsage. If speakers understand the expression but rarely choose it in current speech or writing, koreanUsage must not exceed 2.',
-		'When sourceText is polysemous, do not transfer the familiarity of its common meanings to the supplied sense.',
-		'Use this 1-to-5 scale independently for koreanUsage and englishUsage: 1 obsolete or extremely rare; 2 limited, specialized, or uncommon; 3 regularly useful; 4 common and broadly practical; 5 core everyday vocabulary.',
-		'Always return both usage scores from 1 to 5 even when isValid is 0. Do not average them or calculate a final utilityScore; the application will use 0 for an invalid pair and the lower usage score for a valid pair.',
-		'difficultyLevel measures how difficult the exact English target expression is for a Korean learner to understand, recall, produce, and use correctly in the supplied English sense.',
-		'Consider the acquisition level of that exact sense, lexical familiarity, form length and complexity, idiomaticity, and usage restrictions.',
-		'difficultyLevel is an integer from 1 to 10: 1-2 beginner; 3-4 easy; 5-6 intermediate; 7-8 advanced; 9-10 exceptionally difficult.',
-		'Do not base difficultyLevel on the rarity or difficulty of the Korean source sense or on the obscurity of the underlying concept.'
-	].join(' ');
-}
-
-function buildDeveloperPrompt(): string {
-	return [
-		'Return JSON only and score every supplied Korean-to-English vocabulary sense.',
-		buildScoringCriteriaPrompt(),
-		'Keep each index unchanged. Return each index exactly once. Do not add explanations or examples.',
-		'For each score tuple, use [index, difficultyLevel, koreanUsage, englishUsage, isValid].',
-		'Return one object shaped exactly as {"scores":[[0,1,5,5,1],[1,3,2,4,1],[2,4,3,3,0]]}.'
-	].join(' ');
-}
-
-function buildRecheckDeveloperPrompt(): string {
-	return [
-		'Independently recheck vocabulary pairs that a first pass marked with utilityScore 0; do not presume that the first decision was correct.',
-		'Return JSON only and score every target item.',
-		'Use the supplied headwordContexts to compare sibling senses, but judge each target by its own sourceDefinition, partOfSpeech, targetText, and targetDefinition.',
-		buildScoringCriteriaPrompt(),
-		'Keep each index unchanged and return it exactly once. Do not add explanations or examples.',
-		'For each score tuple, use [index, difficultyLevel, koreanUsage, englishUsage, isValid].',
-		'Return one object shaped exactly as {"scores":[[0,1,5,5,1],[1,3,2,4,1],[2,4,3,3,0]]}.'
-	].join(' ');
-}
-
-function validateScores(payload: ScoreResponse, vocas: VocaForScoring[]): Score[] {
-	if (!Array.isArray(payload.scores)) {
-		throw new Error('AI response does not contain a scores array.');
-	}
-
-	for (const score of payload.scores) {
-		if (
-			!Array.isArray(score) ||
-			score.length !== 5 ||
-			!Number.isInteger(score[0]) ||
-			score[0] < 0 ||
-			score[0] >= vocas.length ||
-			!Number.isInteger(score[1]) ||
-			score[1] < 1 ||
-			score[1] > 10 ||
-			!Number.isInteger(score[2]) ||
-			score[2] < 1 ||
-			score[2] > 5 ||
-			!Number.isInteger(score[3]) ||
-			score[3] < 1 ||
-			score[3] > 5 ||
-			!Number.isInteger(score[4]) ||
-			(score[4] !== 0 && score[4] !== 1)
-		) {
-			throw new Error(`AI returned an invalid score tuple: ${JSON.stringify(score)}.`);
-		}
-	}
-
-	const scores = payload.scores as AiScore[];
-	const returnedIndices = new Set(scores.map((score) => score[0]));
-
-	if (
-		scores.length !== vocas.length ||
-		returnedIndices.size !== vocas.length ||
-		vocas.some((_, index) => !returnedIndices.has(index))
-	) {
-		throw new Error('AI response must contain every requested index exactly once.');
-	}
-
-	return scores.map((score) => ({
-		id: vocas[score[0]]._id.toString(),
-		difficultyLevel: score[1],
-		koreanUsage: score[2],
-		englishUsage: score[3],
-		isValid: score[4],
-		utilityScore: score[4] === 0 ? 0 : Math.min(score[2], score[3])
-	}));
-}
-
-function readScoreMode(args: string[]): ScoreMode {
-	if (args.length !== 1) {
-		throw new Error('Usage: npm run vocas:score -- <missing|zero|all>');
-	}
-
-	const mode = args[0];
-	if (mode !== 'missing' && mode !== 'zero' && mode !== 'all') {
-		throw new Error('Usage: npm run vocas:score -- <missing|zero|all>');
-	}
-
-	return mode;
-}
-
-function buildScoreFilter(mode: ScoreMode, runStartedAt: Date) {
-	if (mode === 'zero') {
-		return { utilityScore: 0, scoreReviewCount: { $ne: 2 } };
-	}
-
-	if (mode === 'missing') {
-		return { difficultyLevel: null, utilityScore: null };
-	}
-
-	return {
-		$or: [
-			{ difficultyLevel: null },
-			{ utilityScore: null },
-			{ scoreEvaluatedAt: { $exists: false } },
-			{ scoreEvaluatedAt: null },
-			{ scoreEvaluatedAt: { $lt: runStartedAt } }
-		]
-	};
-}
-
-async function loadBatch(mode: ScoreMode, runStartedAt: Date): Promise<VocaForScoring[]> {
+async function loadBatch(
+	mode: ScoreMode,
+	afterId: mongoose.Types.ObjectId | undefined,
+	batchLimit: number
+): Promise<VocaForScoring[]> {
 	const collection = mongoose.connection.collection<VocaForScoring>('vocas');
-	const dictionaryFilter = {
-		targetLang: 'en',
-		createdByUserId: { $exists: false }
-	} as const;
-	const scoreFilter = buildScoreFilter(mode, runStartedAt);
-	const batchFilter = { ...dictionaryFilter, ...scoreFilter };
-	const headwords = await collection
-		.aggregate<{ sourceText: string }>([
-			{ $match: batchFilter },
-			{
-				$group: {
-					_id: '$sourceText',
-					firstOriginKey: { $min: '$originKey' }
-				}
-			},
-			{ $sort: { firstOriginKey: 1 } },
-			{ $limit: HEADWORD_BATCH_SIZE },
-			{ $project: { _id: 0, sourceText: '$_id' } }
-		])
-		.toArray();
-
-	if (headwords.length === 0) {
-		return [];
-	}
-
+	const batchFilter = {
+		...scoreFilter(mode),
+		...(afterId ? { _id: { $gt: afterId } } : {})
+	};
 	return collection
-		.find({
-			...batchFilter,
-			sourceText: { $in: headwords.map((headword) => headword.sourceText) }
-		})
-		.sort({ sourceText: 1, originKey: 1 })
+		.find(batchFilter)
+		.sort({ _id: 1 })
+		.limit(batchLimit)
 		.project<VocaForScoring>({
 			originKey: 1,
 			sourceText: 1,
 			sourceDefinition: 1,
 			partOfSpeech: 1,
-			targetText: 1,
-			targetDefinition: 1
-		})
-		.toArray();
-}
-
-async function loadHeadwordContexts(vocas: VocaForScoring[]): Promise<HeadwordContext[]> {
-	const sourceTexts = Array.from(new Set(vocas.map((voca) => voca.sourceText)));
-	const collection = mongoose.connection.collection<VocaForScoring>('vocas');
-	const siblings = await collection
-		.find({
-			targetLang: 'en',
-			createdByUserId: { $exists: false },
-			sourceText: { $in: sourceTexts }
-		})
-		.sort({ sourceText: 1, originKey: 1 })
-		.project<VocaForScoring>({
-			sourceText: 1,
-			sourceDefinition: 1,
-			partOfSpeech: 1,
+			targetLang: 1,
 			targetText: 1,
 			targetDefinition: 1,
-			utilityScore: 1
+			difficultyLevel: 1,
+			utilityScore: 1,
+			scoreEvaluatedAt: 1,
+			scoreEvaluationDeferred: 1
 		})
 		.toArray();
-
-	return sourceTexts.map((sourceText) => ({
-		sourceText: decodeHtmlEntities(sourceText),
-		senses: siblings
-			.filter((sibling) => sibling.sourceText === sourceText)
-			.map((sibling) => ({
-				sourceDefinition: decodeHtmlEntities(sibling.sourceDefinition),
-				partOfSpeech: sibling.partOfSpeech,
-				targetText: decodeHtmlEntities(sibling.targetText),
-				targetDefinition: decodeHtmlEntities(sibling.targetDefinition),
-				utilityScore: sibling.utilityScore ?? null
-			}))
-	}));
 }
 
-async function requestScores(vocas: VocaForScoring[], mode: ScoreMode) {
-	const apiKey = requireEnvironment('OPENROUTER_API_KEY');
-	const client = new OpenRouter({ apiKey });
-	const input = vocas.map((voca, index) => ({
-		index,
-		sourceText: decodeHtmlEntities(voca.sourceText),
-		sourceDefinition: decodeHtmlEntities(voca.sourceDefinition),
-		partOfSpeech: voca.partOfSpeech,
-		targetText: decodeHtmlEntities(voca.targetText),
-		targetDefinition: decodeHtmlEntities(voca.targetDefinition)
-	}));
-	const userContent =
-		mode === 'zero'
-			? JSON.stringify({ targets: input, headwordContexts: await loadHeadwordContexts(vocas) })
-			: JSON.stringify(input);
-	const model = getOpenRouterModel();
-	let lastError: unknown;
-
-	for (let attempt = 1; attempt <= MAX_AI_ATTEMPTS; attempt += 1) {
-		try {
-			const response = await client.chat.send({
-				chatRequest: {
-					stream: false,
-					model,
-					temperature: 0,
-					maxCompletionTokens: 16384,
-					responseFormat: { type: 'json_object' },
-					messages: [
-						{
-							role: 'developer',
-							content: mode === 'zero' ? buildRecheckDeveloperPrompt() : buildDeveloperPrompt()
-						},
-						{ role: 'user', content: userContent }
-					]
+async function requestScores(vocas: VocaForScoring[]) {
+	const scores: Score[] = [];
+	const deferred: Array<{
+		id: string;
+		sourceText: string;
+		targetText: string;
+		attempts: UncertainVocaScoreError['attempts'];
+	}> = [];
+	// Bound concurrency so a large database run does not flood the provider.
+	for (let index = 0; index < vocas.length; index += 5) {
+		const batch = vocas.slice(index, index + 5);
+		const scored = await Promise.all(
+			batch.map(async (voca) => {
+				try {
+					const result = await scoreVocaWithDecisionModel({
+						sourceText: decodeHtmlEntities(voca.sourceText),
+						sourceDefinition: decodeHtmlEntities(voca.sourceDefinition),
+						partOfSpeech: voca.partOfSpeech,
+						targetLang: voca.targetLang,
+						targetText: decodeHtmlEntities(voca.targetText),
+						targetDefinition: decodeHtmlEntities(voca.targetDefinition)
+					});
+					return { id: voca._id.toString(), previous: voca, ...result };
+				} catch (error) {
+					if (!(error instanceof UncertainVocaScoreError)) throw error;
+					deferred.push({
+						id: voca._id.toString(),
+						sourceText: voca.sourceText,
+						targetText: voca.targetText,
+						attempts: error.attempts
+					});
+					return null;
 				}
-			});
-
-			if (!('choices' in response)) {
-				throw new Error('OpenRouter returned an unexpected streaming response.');
-			}
-
-			const choice = response.choices[0];
-
-			if (choice == null) {
-				throw new Error('OpenRouter returned no completion choice.');
-			}
-
-			if (choice.finishReason === 'length') {
-				throw new Error('AI output reached the token limit before completing the score JSON.');
-			}
-
-			const content = readJsonContent(choice.message.content);
-			let payload: ScoreResponse;
-
-			try {
-				payload = JSON.parse(content) as ScoreResponse;
-			} catch (error) {
-				throw new Error(
-					`AI returned invalid JSON (finishReason: ${choice.finishReason ?? 'unknown'}, characters: ${content.length}).`,
-					{ cause: error }
-				);
-			}
-
-			return {
-				model: response.model,
-				scores: validateScores(payload, vocas),
-				usage: response.usage
-			};
-		} catch (error) {
-			lastError = error;
-
-			if (attempt === MAX_AI_ATTEMPTS) {
-				break;
-			}
-
-			const delayMs = INITIAL_AI_RETRY_DELAY_MS * 2 ** (attempt - 1);
-			const message = error instanceof Error ? error.message : String(error);
-			console.warn(
-				`AI 응답 오류 (${attempt}/${MAX_AI_ATTEMPTS}): ${message} ${(delayMs / 1_000).toLocaleString()}초 후 재시도합니다.`
-			);
-			await new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs));
-		}
+			})
+		);
+		scores.push(...scored.filter((item): item is NonNullable<typeof item> => item !== null));
 	}
-
-	throw new Error(`AI scoring failed after ${MAX_AI_ATTEMPTS} attempts.`, { cause: lastError });
+	return { scores, deferred };
 }
 
-async function saveScores(scores: Score[], mode: ScoreMode, runStartedAt: Date): Promise<number> {
+async function saveScores(scores: Score[], mode: ScoreMode): Promise<number> {
+	if (scores.length === 0) return 0;
 	const collection = mongoose.connection.collection('vocas');
 	const scoreEvaluatedAt = new Date();
 	const result = await collection.bulkWrite(
@@ -391,14 +137,37 @@ async function saveScores(scores: Score[], mode: ScoreMode, runStartedAt: Date):
 			updateOne: {
 				filter: {
 					_id: new mongoose.Types.ObjectId(score.id),
-					...buildScoreFilter(mode, runStartedAt)
+					...scoreFilter(mode),
+					sourceText: score.previous.sourceText,
+					sourceDefinition: score.previous.sourceDefinition,
+					partOfSpeech: score.previous.partOfSpeech,
+					targetLang: score.previous.targetLang,
+					targetText: score.previous.targetText,
+					targetDefinition: score.previous.targetDefinition,
+					difficultyLevel:
+						score.previous.difficultyLevel === undefined
+							? { $exists: false }
+							: score.previous.difficultyLevel,
+					utilityScore:
+						score.previous.utilityScore === undefined
+							? { $exists: false }
+							: score.previous.utilityScore,
+					scoreEvaluatedAt:
+						score.previous.scoreEvaluatedAt === undefined
+							? { $exists: false }
+							: score.previous.scoreEvaluatedAt,
+					scoreEvaluationDeferred:
+						score.previous.scoreEvaluationDeferred === undefined
+							? { $exists: false }
+							: score.previous.scoreEvaluationDeferred
 				},
 				update: {
 					$set: {
 						difficultyLevel: score.difficultyLevel,
 						utilityScore: score.utilityScore,
 						scoreReviewCount: mode === 'zero' ? 2 : 1,
-						scoreEvaluatedAt
+						scoreEvaluatedAt,
+						scoreEvaluationDeferred: false
 					}
 				}
 			}
@@ -406,6 +175,38 @@ async function saveScores(scores: Score[], mode: ScoreMode, runStartedAt: Date):
 	);
 
 	return result.modifiedCount;
+}
+
+async function markDeferred(vocas: VocaForScoring[], ids: Set<string>): Promise<void> {
+	const selected = vocas.filter((voca) => ids.has(voca._id.toString()));
+	if (selected.length === 0) return;
+	const result = await mongoose.connection.collection('vocas').bulkWrite(
+		selected.map((voca) => ({
+			updateOne: {
+				filter: {
+					_id: voca._id,
+					sourceText: voca.sourceText,
+					sourceDefinition: voca.sourceDefinition,
+					partOfSpeech: voca.partOfSpeech,
+					targetLang: voca.targetLang,
+					targetText: voca.targetText,
+					targetDefinition: voca.targetDefinition,
+					difficultyLevel:
+						voca.difficultyLevel === undefined ? { $exists: false } : voca.difficultyLevel,
+					utilityScore: voca.utilityScore === undefined ? { $exists: false } : voca.utilityScore,
+					scoreEvaluatedAt:
+						voca.scoreEvaluatedAt === undefined ? { $exists: false } : voca.scoreEvaluatedAt,
+					scoreEvaluationDeferred:
+						voca.scoreEvaluationDeferred === undefined
+							? { $exists: false }
+							: voca.scoreEvaluationDeferred
+				},
+				update: { $set: { scoreEvaluationDeferred: true } }
+			}
+		}))
+	);
+	if (result.matchedCount !== selected.length)
+		throw new Error('Some deferred vocabulary records changed during scoring.');
 }
 
 function createDistribution(minimum: number, maximum: number): ScoreDistribution {
@@ -429,11 +230,11 @@ function addScoresToStatistics(statistics: RunStatistics, scores: Score[]): void
 	statistics.senses += scores.length;
 
 	for (const score of scores) {
-		statistics.utilityScores[String(score.utilityScore)] += 1;
+		statistics.utilityScores[String(Math.round(score.utilityScore))] += 1;
 
 		if (score.utilityScore > 0) {
 			statistics.difficultyScoredSenses += 1;
-			statistics.difficultyLevels[String(score.difficultyLevel)] += 1;
+			statistics.difficultyLevels[String(Math.round(score.difficultyLevel))] += 1;
 		}
 	}
 }
@@ -455,8 +256,8 @@ function formatStatisticsSection(
 		`[${title}]`,
 		`표제어: ${statistics.headwords.toLocaleString()}개`,
 		`뜻: ${statistics.senses.toLocaleString()}개`,
-		`utilityScore: ${formatDistribution(statistics.utilityScores)}`,
-		`difficultyLevel (utilityScore 1-5, ${statistics.difficultyScoredSenses.toLocaleString()}개): ${formatDistribution(statistics.difficultyLevels)}`
+		`utilityScore (정수 구간): ${formatDistribution(statistics.utilityScores)}`,
+		`difficultyLevel (정수 구간, utilityScore 1-5, ${statistics.difficultyScoredSenses.toLocaleString()}개): ${formatDistribution(statistics.difficultyLevels)}`
 	].join('\n');
 }
 
@@ -473,29 +274,45 @@ async function emitStatistics(reportPath: string, section: string): Promise<void
 async function processBatches({
 	mode,
 	onBatch,
-	runStartedAt
+	reportPath,
+	limit
 }: {
 	mode: ScoreMode;
 	onBatch: (batchNumber: number, statistics: RunStatistics) => Promise<void>;
-	runStartedAt: Date;
+	reportPath: string;
+	limit?: number;
 }): Promise<void> {
 	const statistics = createRunStatistics();
+	let deferredCount = 0;
+	let afterId: mongoose.Types.ObjectId | undefined;
+	let attempted = 0;
 
-	while (true) {
-		const vocas = await loadBatch(mode, runStartedAt);
+	while (limit == null || attempted < limit) {
+		const vocas = await loadBatch(mode, afterId, nextBatchSize(limit, attempted, BATCH_SIZE));
 
 		if (vocas.length === 0) {
 			break;
 		}
+		attempted += vocas.length;
+		afterId = vocas.at(-1)!._id;
 
-		const scores = (await requestScores(vocas, mode)).scores;
+		const { scores, deferred } = await requestScores(vocas);
+		if (deferred.length) {
+			await markDeferred(vocas, new Set(deferred.map((item) => item.id)));
+			await appendFile(
+				`${reportPath}.deferred.jsonl`,
+				deferred.map((item) => JSON.stringify(item)).join('\n') + '\n',
+				'utf8'
+			);
+			deferredCount += deferred.length;
+			console.log(`확신도 부족으로 ${deferred.length}개 보류: ${reportPath}.deferred.jsonl`);
+		}
 
-		const written = await saveScores(scores, mode, runStartedAt);
+		const written = await saveScores(scores, mode);
 
 		if (written !== scores.length) {
 			throw new Error(`Expected to save ${scores.length} scores, but saved ${written}.`);
 		}
-
 		const batchStatistics = createRunStatistics();
 		batchStatistics.batches = 1;
 		batchStatistics.headwords = new Set(vocas.map((voca) => voca.sourceText)).size;
@@ -505,6 +322,7 @@ async function processBatches({
 		addScoresToStatistics(statistics, scores);
 		await onBatch(statistics.batches, batchStatistics);
 	}
+	console.log(`선택한 단어: ${attempted}개 (보류 ${deferredCount}개)`);
 }
 
 async function loadStoredStatistics(): Promise<{
@@ -516,8 +334,6 @@ async function loadStoredStatistics(): Promise<{
 }> {
 	const collection = mongoose.connection.collection('vocas');
 	const filter = {
-		targetLang: 'en',
-		createdByUserId: { $exists: false },
 		difficultyLevel: { $type: 'number' },
 		utilityScore: { $type: 'number' }
 	} as const;
@@ -530,14 +346,14 @@ async function loadStoredStatistics(): Promise<{
 			collection
 				.aggregate<{ _id: number; count: number }>([
 					{ $match: difficultyFilter },
-					{ $group: { _id: '$difficultyLevel', count: { $sum: 1 } } },
+					{ $group: { _id: { $floor: { $add: ['$difficultyLevel', 0.5] } }, count: { $sum: 1 } } },
 					{ $sort: { _id: 1 } }
 				])
 				.toArray(),
 			collection
 				.aggregate<{ _id: number; count: number }>([
 					{ $match: filter },
-					{ $group: { _id: '$utilityScore', count: { $sum: 1 } } },
+					{ $group: { _id: { $floor: { $add: ['$utilityScore', 0.5] } }, count: { $sum: 1 } } },
 					{ $sort: { _id: 1 } }
 				])
 				.toArray()
@@ -564,14 +380,11 @@ async function loadStoredStatistics(): Promise<{
 
 async function main(): Promise<void> {
 	const runStartedAt = new Date();
-	const mode = readScoreMode(process.argv.slice(2));
+	const { mode, limit } = readScoringOptions(process.argv.slice(2));
 	const reportPath = await createReportFile(mode);
 
 	if (mode === 'all') {
-		await emitStatistics(
-			reportPath,
-			`[전체 재평가]\nscoreEvaluatedAt 기준 시각: ${runStartedAt.toISOString()}`
-		);
+		await emitStatistics(reportPath, `[전체 재평가]\n실행 시작: ${runStartedAt.toISOString()}`);
 	}
 
 	await mongoose.connect(requireEnvironment('MONGO_URI'));
@@ -579,9 +392,10 @@ async function main(): Promise<void> {
 	try {
 		await processBatches({
 			mode,
+			limit,
+			reportPath,
 			onBatch: async (batchNumber, statistics) =>
-				emitStatistics(reportPath, formatStatisticsSection(`배치 ${batchNumber}`, statistics)),
-			runStartedAt
+				emitStatistics(reportPath, formatStatisticsSection(`배치 ${batchNumber}`, statistics))
 		});
 		const stored = await loadStoredStatistics();
 		const finalStatistics = {

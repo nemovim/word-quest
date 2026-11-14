@@ -1,6 +1,7 @@
 export type WrongResult = {
 	correctAnswer?: string;
 	pronunciationText?: string;
+	pronunciationIpa?: string;
 	status: 'wrong';
 	reasonCode: string | null;
 	reasonLabel: string | null;
@@ -17,6 +18,7 @@ export type SolvedResult = {
 	hintText: string;
 	correctAnswer: string;
 	pronunciationText: string;
+	pronunciationIpa?: string;
 	reviewStage: number;
 	nextReviewLabel: string;
 };

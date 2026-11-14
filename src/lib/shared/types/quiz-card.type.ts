@@ -7,6 +7,7 @@ export type QuizExample = {
 	targetSentenceTemplate: string;
 	targetFillText: string;
 	targetPronunciationText: string;
+	targetPronunciationArpabet?: string;
 	reportCount: number;
 	addedAt: string;
 };

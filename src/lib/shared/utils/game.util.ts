@@ -8,7 +8,7 @@ export const CHEST_STONE_GOLD_DIVISOR = 30;
 export const CHEST_COMMON_RESOURCE_BOOST = 1.3;
 export const RESOURCE_YIELD_UPGRADE_GAINS = { min: 5, max: 15, scale: 10 };
 export const RESOURCE_YIELD_UPGRADE_COST = (level: number) => level + 1;
-export const REBIRTH_BASE_COST = { gold: 1000, iron: 100, silver: 50, stones: 5 };
+export const REBIRTH_BASE_COST = { gold: 5000, iron: 300, silver: 100, stones: 10 };
 export const RESOURCE_YIELD_KINDS = ['gold', 'iron', 'silver', 'stones'] as const;
 export type ResourceYieldKind = (typeof RESOURCE_YIELD_KINDS)[number];
 export const RESOURCE_YIELD_NAMES: Record<ResourceYieldKind, string> = {
@@ -20,14 +20,14 @@ export const RESOURCE_YIELD_NAMES: Record<ResourceYieldKind, string> = {
 export function isResourceYieldKind(value: unknown): value is ResourceYieldKind {
 	return typeof value === 'string' && RESOURCE_YIELD_KINDS.some((kind) => kind === value);
 }
-export function successfulUpgradeLimit(rebirthCount: number): number {
-	return 10 + Math.max(0, Math.floor(Number.isFinite(rebirthCount) ? rebirthCount : 0));
-}
 export function vocabularyUpgradeLimit(currentLevel: number): number {
 	return Math.max(0, Math.floor(Number.isFinite(currentLevel) ? currentLevel * 10 : 0));
 }
+export function rebirthUpgradeTarget(rebirthCount: number): number {
+	return 10 + Math.max(0, Math.floor(Number.isFinite(rebirthCount) ? rebirthCount : 0));
+}
 export function availableUpgradeLimit(currentLevel: number, rebirthCount: number): number {
-	return Math.min(successfulUpgradeLimit(rebirthCount), vocabularyUpgradeLimit(currentLevel));
+	return Math.min(vocabularyUpgradeLimit(currentLevel), rebirthUpgradeTarget(rebirthCount));
 }
 const chanceGain = { min: 2, max: 6, scale: 1 };
 const attackGain = { min: 1, max: 4, scale: 1 };

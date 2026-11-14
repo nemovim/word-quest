@@ -24,7 +24,11 @@
 <section class="solved-panel">
 	<div>
 		<strong>{solvedResult.correctAnswer}</strong>
-		<small>[{solvedResult.pronunciationText}]</small><small class="review"
+		<small>[{solvedResult.pronunciationText}]</small>
+		{#if solvedResult.pronunciationIpa}<small>
+				영어 발음 {solvedResult.pronunciationIpa}</small
+			>{/if}
+		<small class="review"
 			>{solvedResult.status === 'pass' ? '넘김 · ' : ''}{solvedResult.nextReviewLabel} 뒤 복습</small
 		>
 	</div>

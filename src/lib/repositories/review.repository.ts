@@ -9,6 +9,10 @@ export async function findReviewsByUserId(userId: string): Promise<ReviewEntity[
 	return documents.map(toPojo<ReviewEntity>);
 }
 
+export async function findReviewVocaIdsByUser(userId: string): Promise<string[]> {
+	return ReviewModel.distinct('vocaId', { userId });
+}
+
 export async function findDueReviewGroupsByUser(
 	userId: string,
 	directionField: 'promptLang' | 'answerLang',

@@ -1,15 +1,17 @@
-import { randomUUID } from 'node:crypto';
 import { appendFile } from 'node:fs/promises';
 
 import { OpenRouter } from '@openrouter/sdk';
 import mongoose from 'mongoose';
 
+import { examplePipeline, nextBatchSize, readExampleOptions } from './batch-options.ts';
+import { saveGeneratedExamples } from './example-storage.ts';
 import { createLogFile } from './log-file.ts';
-import { getOpenRouterModel } from '../src/lib/server/openrouter-config.ts';
+import { queueDeferredExample } from '../src/lib/server/deferred-example.ts';
 import {
-	MAX_UTILITY_SCORE,
-	MIN_RECOMMENDED_UTILITY_SCORE
-} from '../src/lib/shared/types/general.type.ts';
+	reviewExamplesWithLuna,
+	type ExampleReviewResult
+} from '../src/lib/server/example-luna-review.ts';
+import { resolveGenerationModel } from '../src/lib/server/model-config.ts';
 import { decodeHtmlEntities } from '../src/lib/shared/utils/html-entity.util.ts';
 import { isEnglishLexemeSurface } from '../src/lib/shared/utils/lexeme.util.ts';
 
@@ -25,9 +27,10 @@ type VocaInput = {
 	targetLang: string;
 	targetText: string;
 	targetDefinition: string;
+	utilityScore: number;
 };
 
-type GenerationInput = Omit<VocaInput, '_id' | 'originKey' | 'targetLang'> & { index: number };
+type GenerationInput = Omit<VocaInput, '_id' | 'originKey' | 'utilityScore'> & { index: number };
 
 type GeneratedExample = {
 	sourceSentence: string;
@@ -35,6 +38,7 @@ type GeneratedExample = {
 	targetSentence: string;
 	targetAnswer: string;
 	targetPronunciation: string;
+	targetPronunciationArpabet?: string;
 };
 
 type GeneratedItem = {
@@ -44,15 +48,6 @@ type GeneratedItem = {
 
 type GeneratedResponse = {
 	items: GeneratedItem[];
-};
-
-type ReviewItem = {
-	index: number;
-	accepted: number[];
-};
-
-type ReviewResponse = {
-	items: ReviewItem[];
 };
 
 type UsageSummary = {
@@ -67,8 +62,7 @@ const VALIDATION_FAILURES = [
 	'SOURCE_NOT_FOUND_ONCE',
 	'INVALID_SOURCE_FORM',
 	'TARGET_NOT_FOUND_ONCE',
-	'INVALID_TARGET_FORM',
-	'INVALID_PRONUNCIATION'
+	'INVALID_TARGET_FORM'
 ] as const;
 
 type ValidationFailure = (typeof VALIDATION_FAILURES)[number];
@@ -124,25 +118,6 @@ function requireEnvironment(name: 'MONGO_URI' | 'OPENROUTER_API_KEY'): string {
 	return value;
 }
 
-function readUtilityScore(args: string[]): number {
-	if (args.length !== 1) {
-		throw new Error('Usage: npm run examples:generate -- <utility-score>');
-	}
-
-	const utilityScore = Number(args[0]);
-	if (
-		!Number.isInteger(utilityScore) ||
-		utilityScore < MIN_RECOMMENDED_UTILITY_SCORE ||
-		utilityScore > MAX_UTILITY_SCORE
-	) {
-		throw new Error(
-			`utility-score must be an integer from ${MIN_RECOMMENDED_UTILITY_SCORE} to ${MAX_UTILITY_SCORE}.`
-		);
-	}
-
-	return utilityScore;
-}
-
 function readJsonContent(content: unknown): string {
 	if (typeof content === 'string') {
 		return content;
@@ -164,24 +139,13 @@ function readJsonContent(content: unknown): string {
 function buildDeveloperPrompt(): string {
 	return [
 		'Return JSON only.',
-		`Generate ${EXAMPLES_PER_VOCA} natural Korean-English quiz examples for each vocabulary item; return fewer only when another valid example cannot be produced.`,
+		`Generate ${EXAMPLES_PER_VOCA} natural bilingual Korean and specified target-language quiz examples for each vocabulary item; return fewer only when another valid example cannot be produced.`,
 		'Each pair must use the supplied lexemes in the supplied senses, express the same situation in both languages, and be idiomatic and grammatically correct.',
 		'Use only grammar-required inflections and do not replace either lexeme.',
-		'Return sourceAnswer and targetAnswer as the exact sentence substrings to hide, and targetPronunciation as the Hangul reading of targetAnswer.',
+		'Return sourceAnswer and targetAnswer as the exact sentence substrings to hide.',
 		'Use Korean noun items as nouns, never as 하다 predicates; sourceAnswer is the unchanged headword with any particle left outside. For predicates, use the complete conjugated form.',
 		'Keep every index unchanged and return it exactly once.',
-		'Return an object shaped as {"items":[{"index":0,"examples":[{"sourceSentence":"...","sourceAnswer":"...","targetSentence":"...","targetAnswer":"...","targetPronunciation":"..."}]}]}.'
-	].join(' ');
-}
-
-function buildReviewDeveloperPrompt(): string {
-	return [
-		'Return JSON only.',
-		'Review each quiz example independently as a strict bilingual editor.',
-		'Accept it only when both sentences are idiomatic contemporary usage, grammatically correct, express the same context, and use the supplied lexemes in the supplied senses.',
-		'Do not reject a genuinely idiomatic example merely because another translation is more common; however, reject wording that is merely understandable or technically possible when a native speaker would normally avoid that lexeme or collocation in the given context.',
-		'Return every item index exactly once and list only the zero-based example indices that pass.',
-		'Return an object shaped as {"items":[{"index":0,"accepted":[0,2]}]}. Do not return explanations or corrected sentences.'
+		'Return an object shaped as {"items":[{"index":0,"examples":[{"sourceSentence":"...","sourceAnswer":"...","targetSentence":"...","targetAnswer":"..."}]}]}.'
 	].join(' ');
 }
 
@@ -252,8 +216,7 @@ function hasRequiredFields(example: GeneratedExample): boolean {
 		example.sourceSentence,
 		example.sourceAnswer,
 		example.targetSentence,
-		example.targetAnswer,
-		example.targetPronunciation
+		example.targetAnswer
 	].every((value) => typeof value === 'string' && value.trim() !== '');
 }
 
@@ -267,27 +230,25 @@ function hasValidSourceForm(example: GeneratedExample, voca: VocaInput): boolean
 }
 
 function hasValidTargetForm(example: GeneratedExample, voca: VocaInput): boolean {
-	return isEnglishLexemeSurface(voca.targetText, example.targetAnswer, voca.partOfSpeech);
-}
-
-function hasValidPronunciation(example: GeneratedExample): boolean {
 	return (
-		/\p{Script=Hangul}/u.test(example.targetPronunciation) &&
-		/^[\p{Script=Hangul}\s.,!?()\-~0-9]+$/u.test(example.targetPronunciation)
+		voca.targetLang !== 'en' ||
+		isEnglishLexemeSurface(voca.targetText, example.targetAnswer, voca.partOfSpeech)
 	);
 }
 
 function normalizeMechanicalFields(example: GeneratedExample, voca: VocaInput): GeneratedExample {
+	if (typeof example !== 'object' || example == null) return example;
+	const normalized = { ...example, targetPronunciation: '' };
 	if (
 		voca.partOfSpeech === 'noun' &&
 		typeof example?.sourceSentence === 'string' &&
 		hasExactlyOneOccurrence(example.sourceSentence, voca.sourceText) &&
 		hasValidKoreanBoundary(example.sourceSentence, voca.sourceText)
 	) {
-		return { ...example, sourceAnswer: voca.sourceText };
+		return { ...normalized, sourceAnswer: voca.sourceText };
 	}
 
-	return example;
+	return normalized;
 }
 
 function validateExample(example: GeneratedExample, voca: VocaInput): ValidationFailure | null {
@@ -304,13 +265,11 @@ function validateExample(example: GeneratedExample, voca: VocaInput): Validation
 		return 'TARGET_NOT_FOUND_ONCE';
 	}
 	if (
-		!hasValidAlphabeticBoundary(example.targetSentence, example.targetAnswer) ||
+		(voca.targetLang === 'en' &&
+			!hasValidAlphabeticBoundary(example.targetSentence, example.targetAnswer)) ||
 		!hasValidTargetForm(example, voca)
 	) {
 		return 'INVALID_TARGET_FORM';
-	}
-	if (!hasValidPronunciation(example)) {
-		return 'INVALID_PRONUNCIATION';
 	}
 
 	return null;
@@ -375,60 +334,6 @@ function validateAndFilterResponse(
 		payload: { items: filteredItems },
 		generatedExampleCount,
 		rejectionCounts
-	};
-}
-
-function buildReviewInput(payload: GeneratedResponse, input: GenerationInput[]) {
-	return payload.items
-		.filter((item) => item.examples.length > 0)
-		.map((item) => ({
-			...input[item.index],
-			examples: item.examples
-		}));
-}
-
-function applyReview(payload: GeneratedResponse, review: ReviewResponse): GeneratedResponse {
-	const reviewableItems = payload.items.filter((item) => item.examples.length > 0);
-
-	if (!Array.isArray(review.items) || review.items.length !== reviewableItems.length) {
-		throw new Error('AI review does not contain every reviewable item.');
-	}
-
-	const reviewsByIndex = new Map<number, Set<number>>();
-
-	for (const item of review.items) {
-		const generatedItem = payload.items[item.index];
-		if (
-			!Number.isInteger(item.index) ||
-			generatedItem == null ||
-			generatedItem.examples.length === 0 ||
-			!Array.isArray(item.accepted) ||
-			item.accepted.some(
-				(exampleIndex) =>
-					!Number.isInteger(exampleIndex) ||
-					exampleIndex < 0 ||
-					exampleIndex >= generatedItem.examples.length
-			) ||
-			new Set(item.accepted).size !== item.accepted.length ||
-			reviewsByIndex.has(item.index)
-		) {
-			throw new Error(`Invalid review item: ${JSON.stringify(item)}.`);
-		}
-
-		reviewsByIndex.set(item.index, new Set(item.accepted));
-	}
-
-	if (reviewsByIndex.size !== reviewableItems.length) {
-		throw new Error('AI review contains duplicate or missing indices.');
-	}
-
-	return {
-		items: payload.items.map((item) => {
-			const accepted = reviewsByIndex.get(item.index);
-			return accepted == null
-				? item
-				: { ...item, examples: item.examples.filter((_, index) => accepted.has(index)) };
-		})
 	};
 }
 
@@ -558,82 +463,83 @@ async function generateAndReview({
 		(count, item) => count + item.examples.length,
 		0
 	);
-	const reviewInput = buildReviewInput(codeValidatedPayload, input);
-	const review = await requestValidatedJson<ReviewResponse, GeneratedResponse>({
-		client,
-		model,
-		developerPrompt: buildReviewDeveloperPrompt(),
-		input: reviewInput,
-		usage: reviewUsage,
-		maxCompletionTokens: 4096,
-		label: 'Example review',
-		validate: (candidate) => applyReview(codeValidatedPayload, candidate)
-	});
+	const examplesForReview = codeValidatedPayload.items.flatMap((item) =>
+		item.examples.map((example, exampleIndex) => ({ itemIndex: item.index, exampleIndex, example }))
+	);
+	const acceptedByItem = new Map<number, Set<number>>();
+	const deferredExamples: Array<{
+		itemIndex: number;
+		example: GeneratedExample;
+		attempts: ExampleReviewResult['attempts'];
+		reason?: string;
+	}> = [];
+	let reviewAttempts = 0;
+	for (let index = 0; index < examplesForReview.length; index += 5) {
+		const chunk = examplesForReview.slice(index, index + 5);
+		const results = await reviewExamplesWithLuna(
+			chunk.map(({ itemIndex, example }) => ({
+				...input[itemIndex],
+				targetLang: vocas[itemIndex].targetLang,
+				sourceSentence: example.sourceSentence,
+				sourceAnswer: example.sourceAnswer,
+				targetSentence: example.targetSentence,
+				targetAnswer: example.targetAnswer,
+				targetPronunciation: example.targetPronunciation
+			}))
+		);
+		if (results.some((result) => result.attempts.length)) reviewAttempts++;
+		const decisions = chunk.map((entry, i) => ({ ...entry, result: results[i] }));
+		for (const { itemIndex, exampleIndex, example, result } of decisions) {
+			if (result.targetPronunciation) example.targetPronunciation = result.targetPronunciation;
+			if (result.targetPronunciationArpabet)
+				example.targetPronunciationArpabet = result.targetPronunciationArpabet;
+			for (const attempt of result.attempts) {
+				reviewUsage.promptTokens += attempt.usage?.input_tokens ?? 0;
+				reviewUsage.completionTokens += attempt.usage?.output_tokens ?? 0;
+				reviewUsage.totalTokens +=
+					(attempt.usage?.input_tokens ?? 0) + (attempt.usage?.output_tokens ?? 0);
+				reviewUsage.cost += attempt.usage?.cost ?? 0;
+			}
+			if (result.status === 'deferred')
+				deferredExamples.push({
+					itemIndex,
+					example,
+					attempts: result.attempts,
+					reason: 'reason' in result ? result.reason : undefined
+				});
+			if (result.accepted) {
+				const indices = acceptedByItem.get(itemIndex) ?? new Set<number>();
+				indices.add(exampleIndex);
+				acceptedByItem.set(itemIndex, indices);
+			}
+		}
+	}
+	const reviewedPayload: GeneratedResponse = {
+		items: codeValidatedPayload.items.map((item) => ({
+			...item,
+			examples: item.examples.filter((_, index) => acceptedByItem.get(item.index)?.has(index))
+		}))
+	};
 	const reviewRejectedExamples = collectReviewRejectedExamples(
 		codeValidatedPayload,
-		review.payload
+		reviewedPayload
 	);
 
 	return {
-		payload: review.payload,
+		payload: reviewedPayload,
 		generatedExampleCount: generation.payload.generatedExampleCount,
 		codeValidatedExampleCount,
 		codeRejectionCounts: generation.payload.rejectionCounts,
 		reviewRejectedExampleCount:
 			codeValidatedExampleCount -
-			review.payload.items.reduce((count, item) => count + item.examples.length, 0),
+			reviewedPayload.items.reduce((count, item) => count + item.examples.length, 0) -
+			deferredExamples.length,
 		reviewRejectedExamples,
+		deferredExamples,
 		generationAttempts: generation.attempts,
-		reviewAttempts: review.attempts,
+		reviewAttempts,
 		responseModel: generation.responseModel
 	};
-}
-
-function buildEligiblePipeline(
-	utilityScore: number,
-	limit?: number,
-	afterOriginKey?: string
-): mongoose.PipelineStage[] {
-	return [
-		{
-			$match: {
-				targetLang: 'en',
-				createdByUserId: { $exists: false },
-				utilityScore,
-				...(afterOriginKey == null ? {} : { originKey: { $gt: afterOriginKey } })
-			}
-		},
-		{
-			$lookup: {
-				from: 'quizcards',
-				let: { vocaId: { $toString: '$_id' } },
-				pipeline: [
-					{
-						$match: {
-							'examples.0': { $exists: true },
-							$expr: { $eq: ['$vocaId', '$$vocaId'] }
-						}
-					},
-					{ $limit: 1 }
-				],
-				as: 'quizCardsWithExamples'
-			}
-		},
-		{ $match: { quizCardsWithExamples: { $eq: [] } } },
-		{ $sort: { originKey: 1 } },
-		...(limit == null ? [] : [{ $limit: limit }]),
-		{
-			$project: {
-				originKey: 1,
-				sourceText: 1,
-				sourceDefinition: 1,
-				partOfSpeech: 1,
-				targetLang: 1,
-				targetText: 1,
-				targetDefinition: 1
-			}
-		}
-	];
 }
 
 type BatchResult = Awaited<ReturnType<typeof generateAndReview>> & {
@@ -664,6 +570,7 @@ function buildInput(vocas: VocaInput[]): GenerationInput[] {
 		sourceText: decodeHtmlEntities(voca.sourceText),
 		sourceDefinition: decodeHtmlEntities(voca.sourceDefinition),
 		partOfSpeech: voca.partOfSpeech,
+		targetLang: voca.targetLang,
 		targetText: decodeHtmlEntities(voca.targetText),
 		targetDefinition: decodeHtmlEntities(voca.targetDefinition)
 	}));
@@ -692,8 +599,10 @@ async function processBatch(
 	let generationAttempts = initialRun.generationAttempts;
 	let reviewAttempts = initialRun.reviewAttempts;
 	const codeRejectionCounts = initialRun.codeRejectionCounts;
+	const deferredExamples = [...initialRun.deferredExamples];
+	const deferredIndices = new Set(deferredExamples.map((item) => item.itemIndex));
 	const failedIndices = payload.items
-		.filter((item) => item.examples.length === 0)
+		.filter((item) => item.examples.length === 0 && !deferredIndices.has(item.index))
 		.map((item) => item.index);
 
 	if (failedIndices.length > 0) {
@@ -713,6 +622,12 @@ async function processBatch(
 				generationPromptSuffix:
 					'This is a retry for items with no surviving examples. Follow the supplied part of speech and answer marking exactly.'
 			});
+			deferredExamples.push(
+				...retryRun.deferredExamples.map((item) => ({
+					...item,
+					itemIndex: failedIndices[item.itemIndex]
+				}))
+			);
 
 			for (const retryItem of retryRun.payload.items) {
 				payload.items[failedIndices[retryItem.index]] = {
@@ -735,6 +650,7 @@ async function processBatch(
 
 	return {
 		...initialRun,
+		deferredExamples,
 		payload,
 		generationUsage,
 		reviewUsage,
@@ -748,61 +664,15 @@ async function processBatch(
 	};
 }
 
-function hideAnswer(sentence: string, answer: string): string {
-	return sentence.replace(answer, '{{---}}');
-}
-
-async function saveBatch(vocas: VocaInput[], payload: GeneratedResponse): Promise<number> {
-	const now = new Date();
-	const operations = payload.items
-		.filter((item) => item.examples.length > 0)
-		.map((item) => ({
-			updateOne: {
-				filter: { vocaId: vocas[item.index]._id.toString() },
-				update: {
-					$set: {
-						examples: item.examples.map((example) => ({
-							_id: randomUUID(),
-							sourceSentenceTemplate: hideAnswer(example.sourceSentence, example.sourceAnswer),
-							sourceFillText: example.sourceAnswer,
-							targetSentenceTemplate: hideAnswer(example.targetSentence, example.targetAnswer),
-							targetFillText: example.targetAnswer,
-							targetPronunciationText: example.targetPronunciation,
-							reportCount: 0,
-							addedAt: now
-						})),
-						updatedAt: now
-					},
-					$setOnInsert: { _id: randomUUID(), createdAt: now }
-				},
-				upsert: true
-			}
-		}));
-
-	if (operations.length > 0) {
-		await mongoose.connection.collection('quizcards').bulkWrite(operations, { ordered: false });
-	}
-	return operations.length;
-}
-
 async function main(): Promise<void> {
-	const utilityScore = readUtilityScore(process.argv.slice(2));
+	const { mode, limit } = readExampleOptions(process.argv.slice(2));
 	const batchSize = BATCH_SIZE;
-	const model = getOpenRouterModel();
+	const model = resolveGenerationModel(process.env.OPENROUTER_MODEL);
 	const startedAt = new Date();
 
 	await mongoose.connect(requireEnvironment('MONGO_URI'));
 	try {
 		const collection = mongoose.connection.collection<VocaInput>('vocas');
-		const countRows = await collection
-			.aggregate<{ count: number }>([...buildEligiblePipeline(utilityScore), { $count: 'count' }])
-			.toArray();
-		const eligibleCount = countRows[0]?.count ?? 0;
-		if (eligibleCount === 0) {
-			console.log(`No eligible utilityScore ${utilityScore} vocas without examples were found.`);
-			return;
-		}
-
 		const client = new OpenRouter({ apiKey: requireEnvironment('OPENROUTER_API_KEY') });
 		const failedVocaIds = new Set<string>();
 		const totalGenerationUsage = createUsage();
@@ -814,26 +684,53 @@ async function main(): Promise<void> {
 		let retryVocaCount = 0;
 		let codeRejectedExampleCount = 0;
 		let reviewRejectedExampleCount = 0;
-		let afterOriginKey: string | undefined;
-		const header = JSON.stringify({ startedAt, model, utilityScore, eligibleCount, batchSize });
+		let cursor: { utilityScore: number; id: mongoose.Types.ObjectId } | undefined;
+		const header = JSON.stringify({ startedAt, model, mode, limit, batchSize });
 		const logPath = await createLogFile(
 			'example-generation',
-			`utility-${utilityScore}`,
+			`examples-${mode}`,
 			startedAt,
 			`${header}\n`
 		);
 
-		while (true) {
+		while (limit == null || attemptedVocaCount < limit) {
+			const batchLimit = nextBatchSize(limit, attemptedVocaCount, batchSize);
 			const vocas = await collection
-				.aggregate<VocaInput>(buildEligiblePipeline(utilityScore, batchSize, afterOriginKey))
+				.aggregate<VocaInput>(examplePipeline(mode, batchLimit, cursor), { allowDiskUse: true })
 				.toArray();
 			if (vocas.length === 0) break;
-			afterOriginKey = vocas.at(-1)?.originKey;
+			const lastVoca = vocas.at(-1)!;
+			cursor = { utilityScore: lastVoca.utilityScore, id: lastVoca._id };
 
 			batchNumber += 1;
 			const input = buildInput(vocas);
 			try {
 				const result = await processBatch(client, model, vocas, input);
+				if (result.deferredExamples.length) {
+					for (const item of result.deferredExamples) {
+						const voca = vocas[item.itemIndex];
+						const { sourceText, sourceDefinition, partOfSpeech, targetText, targetDefinition } =
+							input[item.itemIndex];
+						await queueDeferredExample(
+							{
+								sourceText,
+								sourceDefinition,
+								partOfSpeech,
+								targetText,
+								targetDefinition,
+								targetLang: voca.targetLang,
+								...item.example
+							},
+							voca._id.toString(),
+							item.attempts,
+							item.reason
+						);
+					}
+					const entries = result.deferredExamples.map(({ itemIndex, ...item }) =>
+						JSON.stringify({ vocaId: vocas[itemIndex]._id.toString(), ...item })
+					);
+					await appendFile(`${logPath}.deferred.jsonl`, entries.join('\n') + '\n', 'utf8');
+				}
 				const successfulItems = result.payload.items.filter((item) => item.examples.length > 0);
 				for (const item of result.payload.items) {
 					if (item.examples.length === 0) {
@@ -841,13 +738,10 @@ async function main(): Promise<void> {
 						failedVocaIds.add(vocaId);
 					}
 				}
-				const writtenCount = await saveBatch(vocas, result.payload);
+				const written = await saveGeneratedExamples(vocas, result.payload);
 				attemptedVocaCount += vocas.length;
-				savedVocaCount += writtenCount;
-				savedExampleCount += successfulItems.reduce(
-					(count, item) => count + item.examples.length,
-					0
-				);
+				savedVocaCount += written.vocas;
+				savedExampleCount += written.examples;
 				retryVocaCount += result.retryVocaCount;
 				codeRejectedExampleCount += result.generatedExampleCount - result.codeValidatedExampleCount;
 				reviewRejectedExampleCount += result.reviewRejectedExampleCount;
@@ -857,9 +751,9 @@ async function main(): Promise<void> {
 				const batchStats = {
 					batch: batchNumber,
 					vocas: vocas.length,
-					savedVocas: successfulItems.length,
+					savedVocas: written.vocas,
 					failedVocas: vocas.length - successfulItems.length,
-					examples: successfulItems.reduce((count, item) => count + item.examples.length, 0),
+					examples: written.examples,
 					retriedVocas: result.retryVocaCount,
 					cost: result.generationUsage.cost + result.reviewUsage.cost
 				};
@@ -881,8 +775,8 @@ async function main(): Promise<void> {
 			startedAt,
 			finishedAt: new Date(),
 			model,
-			utilityScore,
-			eligibleVocaCount: eligibleCount,
+			mode,
+			limit,
 			batchCount: batchNumber,
 			attemptedVocaCount,
 			savedVocaCount,

@@ -309,7 +309,16 @@ export function normalizeQuizReportExampleDraft(
 		| 'targetPronunciationText'
 	>,
 	targetLang: QuizReportVocaSnapshot['targetLang'],
-	metadata: Pick<QuizExample, '_id' | 'reportCount' | 'addedAt'>
+	metadata: Pick<
+		QuizExample,
+		| '_id'
+		| 'reportCount'
+		| 'addedAt'
+		| 'targetSentenceTemplate'
+		| 'targetFillText'
+		| 'targetPronunciationText'
+		| 'targetPronunciationArpabet'
+	>
 ): QuizExample {
 	const normalized = buildQuizCardCreate('proposal', targetLang, {
 		examples: [
@@ -334,6 +343,15 @@ export function normalizeQuizReportExampleDraft(
 	if (normalized == null) throw new Error('제안 예문이 올바르지 않습니다.');
 	return {
 		...normalized,
+		...(normalized.targetFillText === metadata.targetFillText &&
+		normalized.targetSentenceTemplate === metadata.targetSentenceTemplate &&
+		normalized.targetPronunciationText === metadata.targetPronunciationText
+			? {
+					...(metadata.targetPronunciationArpabet
+						? { targetPronunciationArpabet: metadata.targetPronunciationArpabet }
+						: {})
+				}
+			: {}),
 		_id: metadata._id,
 		reportCount: metadata.reportCount,
 		addedAt: metadata.addedAt

@@ -14,6 +14,10 @@ describe('dashboard.usecase', () => {
 	});
 
 	it('passes pending reports and permanently blocked words to the summary', async () => {
+		vi.spyOn(ReviewRepository, 'findReviewVocaIdsByUser').mockResolvedValue([
+			'blocked',
+			'duplicate'
+		]);
 		vi.spyOn(QuizReportRepository, 'findPendingReportedVocaIds').mockResolvedValue([
 			'reported',
 			'duplicate'
@@ -33,6 +37,10 @@ describe('dashboard.usecase', () => {
 		const user = makeUser();
 
 		await loadSummary(user);
+		expect(VocaRepository.findPermanentlyExcludedVocaIds).toHaveBeenCalledWith([
+			'blocked',
+			'duplicate'
+		]);
 
 		expect(getReviewSummarySpy).toHaveBeenCalledWith(
 			user._id,

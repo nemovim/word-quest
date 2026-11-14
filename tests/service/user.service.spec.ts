@@ -15,6 +15,16 @@ describe('user.service', () => {
 		expect(calculateVocabularyLevel(reviews, [makeVoca()])).toBe(1);
 	});
 
+	it('allows poor results to lower the vocabulary level below 1, down to 0', () => {
+		const reviews = Array.from({ length: 50 }, (_, index) =>
+			makeReview({ vocaId: `voca-${index}`, reviewStage: 0, correctCount: 0, wrongCount: 1 })
+		);
+		const vocas = reviews.map((review) => makeVoca({ _id: review.vocaId, difficultyLevel: 1 }));
+
+		expect(calculateVocabularyLevel(reviews.slice(0, 1), vocas)).toBeLessThan(1);
+		expect(calculateVocabularyLevel(reviews, vocas)).toBe(0);
+	});
+
 	it('returns a continuous level and rewards mastery of harder vocas', () => {
 		const masteredReview = makeReview({ reviewStage: 6, correctCount: 3, wrongCount: 0 });
 		const easyLevel = calculateVocabularyLevel(
@@ -31,61 +41,33 @@ describe('user.service', () => {
 		expect(Number.isInteger(hardLevel)).toBe(false);
 	});
 
-	it('keeps first-correct stage 4 below the learned difficulty', () => {
-		const reviews = Array.from({ length: 50 }, (_, index) =>
-			makeReview({
-				_id: `review-${index}`,
-				vocaId: `voca-${index}`,
-				reviewStage: 4,
-				correctCount: 1,
-				wrongCount: 0
-			})
+	it('uses the requested mastery values for each review stage', () => {
+		const vocas = [makeVoca({ difficultyLevel: 1 })];
+		const levels = Array.from({ length: 8 }, (_, stage) =>
+			calculateVocabularyLevel(
+				[makeReview({ reviewStage: stage, correctCount: 1, wrongCount: 0 })],
+				vocas
+			)
 		);
-		const vocas = reviews.map((review) => makeVoca({ _id: review.vocaId, difficultyLevel: 2 }));
-
-		const level = calculateVocabularyLevel(reviews, vocas);
-
-		expect(level).toBeGreaterThan(1);
-		expect(level).toBeLessThan(2);
+		expect(levels[4]).toBe(1);
+		for (let stage = 1; stage < levels.length; stage += 1)
+			expect(levels[stage]).toBeGreaterThan(levels[stage - 1]);
+		expect(
+			calculateVocabularyLevel(
+				[makeReview({ reviewStage: 8, correctCount: 1, wrongCount: 0 })],
+				vocas
+			)
+		).toBe(levels[7]);
 	});
 
-	it('treats stage 7 mastery as the baseline for an equal-difficulty level', () => {
-		const reviews = Array.from({ length: 50 }, (_, index) =>
-			makeReview({
-				_id: `review-${index}`,
-				vocaId: `voca-${index}`,
-				reviewStage: 7,
-				correctCount: 4,
-				wrongCount: 0
-			})
+	it('raises the level when first-correct reviews include harder words', () => {
+		const reviews = Array.from({ length: 9 }, (_, index) =>
+			makeReview({ vocaId: `voca-${index}`, reviewStage: 4, correctCount: 1, wrongCount: 0 })
 		);
-		const vocas = reviews.map((review) => makeVoca({ _id: review.vocaId, difficultyLevel: 2 }));
-
-		const level = calculateVocabularyLevel(reviews, vocas);
-
-		expect(level).toBeGreaterThanOrEqual(1.9);
-		expect(level).toBeLessThanOrEqual(2);
-	});
-
-	it('treats legacy stage 8 as the stage 7 mastery cap', () => {
-		const reviews = Array.from({ length: 500 }, (_, index) =>
-			makeReview({
-				_id: `review-${index}`,
-				vocaId: `voca-${index}`,
-				reviewStage: 8,
-				correctCount: 5,
-				wrongCount: 0
-			})
+		const vocas = reviews.map((review, index) =>
+			makeVoca({ _id: review.vocaId, difficultyLevel: index < 6 ? 1 : 2 })
 		);
-		const vocas = reviews.map((review) => makeVoca({ _id: review.vocaId, difficultyLevel: 3 }));
-
-		const legacyLevel = calculateVocabularyLevel(reviews, vocas);
-		const cappedLevel = calculateVocabularyLevel(
-			reviews.map((review) => ({ ...review, reviewStage: 7 })),
-			vocas
-		);
-
-		expect(legacyLevel).toBe(cappedLevel);
+		expect(calculateVocabularyLevel(reviews, vocas)).toBeGreaterThan(1);
 	});
 
 	it('uses one latest answered review per voca', () => {

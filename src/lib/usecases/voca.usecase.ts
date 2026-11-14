@@ -37,9 +37,9 @@ import {
 import { assertCanStartNewVoca, NewVocaLimitError } from '$lib/service/new-voca-limit.service';
 import { applyGeneratedMetadata, buildCustomVocaCreate } from '$lib/service/voca.service';
 import {
-	INVALID_UTILITY_SCORE,
 	KOREAN_LANGUAGE_CODE,
-	LANGUAGE_CODES
+	LANGUAGE_CODES,
+	MIN_RECOMMENDED_UTILITY_SCORE
 } from '$lib/shared/types/general.type';
 import { PARTS_OF_SPEECH } from '$lib/shared/types/voca.type';
 import {
@@ -54,6 +54,7 @@ type GeneratedExampleText = {
 	fullSentence: string;
 	answerSurface: string;
 	pronunciationText: string;
+	targetPronunciationArpabet?: string;
 };
 
 const SOURCE_TEXT_MAX_LENGTH = 100;
@@ -382,7 +383,11 @@ function buildReviewFailure(
 
 async function searchOptions(sourceText: string, targetLang: LanguageCode): Promise<Voca[]> {
 	const options = await findVocasBySourceText(targetLang, sourceText);
-	return options.filter((option) => option.utilityScore !== INVALID_UTILITY_SCORE);
+	return options.filter(
+		(option) =>
+			(option.utilityScore == null || option.utilityScore >= MIN_RECOMMENDED_UTILITY_SCORE) &&
+			!option.scoreEvaluationDeferred
+	);
 }
 
 function buildReviewVocaFromExisting(currentVoca: Voca, seed: CandidateSeed): ReviewVocaPreview {
@@ -491,7 +496,10 @@ function parseGeneratedExampleText(value: unknown): GeneratedExampleText {
 		languageCode: parseLanguageCode(value.languageCode),
 		fullSentence: value.fullSentence,
 		answerSurface: value.answerSurface,
-		pronunciationText: value.pronunciationText
+		pronunciationText: value.pronunciationText,
+		...(typeof value.targetPronunciationArpabet === 'string'
+			? { targetPronunciationArpabet: value.targetPronunciationArpabet }
+			: {})
 	};
 }
 
@@ -929,7 +937,7 @@ export async function handleMemorizeAction(
 
 		const unavailableVocaIds = await Promise.all([
 			findPendingReportedVocaIds(),
-			findPermanentlyExcludedVocaIds()
+			findPermanentlyExcludedVocaIds([currentVoca._id])
 		]);
 		if (unavailableVocaIds.some((vocaIds) => vocaIds.includes(currentVoca._id))) {
 			return buildFailure(

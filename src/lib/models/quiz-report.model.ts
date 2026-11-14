@@ -24,6 +24,7 @@ const quizExampleSchema = new mongoose.Schema(
 		targetSentenceTemplate: { type: String, required: true },
 		targetFillText: { type: String, required: true },
 		targetPronunciationText: { type: String, required: true },
+		targetPronunciationArpabet: { type: String, required: false },
 		reportCount: { type: Number, required: true },
 		addedAt: { type: String, required: true }
 	},

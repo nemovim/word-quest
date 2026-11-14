@@ -1,7 +1,11 @@
 import type { VocaEntity, VocaCreate } from '$lib/shared/types/voca.type';
 
 import VocaModel from '$lib/models/voca.model';
-import { KOREAN_LANGUAGE_CODE, LANGUAGE_CODES } from '$lib/shared/types/general.type';
+import {
+	KOREAN_LANGUAGE_CODE,
+	LANGUAGE_CODES,
+	MIN_RECOMMENDED_UTILITY_SCORE
+} from '$lib/shared/types/general.type';
 import { normalizeAnswer } from '$lib/shared/utils/answer.util';
 import { toPojo } from '$lib/shared/utils/general.util';
 
@@ -136,9 +140,15 @@ export async function findVocaDifficultiesByIds(
 	return documents.map(toPojo<Pick<VocaEntity, '_id' | 'difficultyLevel'>>);
 }
 
-export async function findPermanentlyExcludedVocaIds(): Promise<string[]> {
-	const vocaIds = await VocaModel.distinct('_id', {
-		quizExcludedByReportId: { $exists: true }
+export async function findPermanentlyExcludedVocaIds(vocaIds?: string[]): Promise<string[]> {
+	if (vocaIds?.length === 0) return [];
+	const excludedIds = await VocaModel.distinct('_id', {
+		...(vocaIds == null ? {} : { _id: { $in: vocaIds } }),
+		$or: [
+			{ quizExcludedByReportId: { $exists: true } },
+			{ utilityScore: { $type: 'number', $lt: MIN_RECOMMENDED_UTILITY_SCORE } },
+			{ scoreEvaluationDeferred: true }
+		]
 	});
-	return vocaIds.map(String);
+	return excludedIds.map(String);
 }

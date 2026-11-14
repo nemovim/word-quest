@@ -15,6 +15,7 @@
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"vocas:score": "node --env-file=.env scripts/score-vocas.ts",
+		"vocas:examples": "node --env-file=.env scripts/generate-examples.ts",
 		"examples:generate": "node --env-file=.env scripts/generate-examples.ts",
 		"pwa:generate": "pwa-assets-generator",
 		"lockfile:check": "npm ci --dry-run --ignore-scripts --no-audit --no-fund",

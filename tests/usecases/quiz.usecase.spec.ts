@@ -45,6 +45,7 @@ function mockBaseReads() {
 	vi.spyOn(VocaRepository, 'updateVocaDifficultyIfCurrent').mockResolvedValue(makeVoca());
 	vi.spyOn(VocaRepository, 'findPermanentlyExcludedVocaIds').mockResolvedValue([]);
 	vi.spyOn(ReviewRepository, 'findReviewByUserAndVoca').mockResolvedValue(makeReview());
+	vi.spyOn(ReviewRepository, 'findReviewVocaIdsByUser').mockResolvedValue(['voca-1']);
 	vi.spyOn(ReviewRepository, 'countAnsweredReviewsByVoca').mockResolvedValue(1);
 	vi.spyOn(ReviewRepository, 'findReviewedVocaIdsByUserDirection').mockResolvedValue([]);
 	vi.spyOn(QuizReportRepository, 'findPendingReportedVocaIds').mockResolvedValue([]);
@@ -64,11 +65,43 @@ function mockBaseReads() {
 }
 
 describe('quiz.usecase', () => {
+	it('derives stressed IPA only in revealed English feedback from stored CMU pronunciation', async () => {
+		mockBaseReads();
+		vi.mocked(QuizCardRepository.findQuizCardByVocaId).mockResolvedValue(
+			makeQuizCard({ examples: [makeQuizExample({ targetPronunciationArpabet: 'AE1 P AH0 L' })] })
+		);
+		const revealed = await revealQuizAnswer(baseRequest);
+		expect(revealed).toMatchObject({ correctAnswer: 'apple', pronunciationIpa: '/ˈæpəl/' });
+		const result = await checkQuizAnswer({ ...baseRequest, answerText: 'apple' });
+		expect(result).toMatchObject({ status: 'correct', pronunciationIpa: '/ˈæpəl/' });
+	});
+
+	it('does not fail the result for missing or malformed older pronunciation data', async () => {
+		mockBaseReads();
+		vi.mocked(QuizCardRepository.findQuizCardByVocaId).mockResolvedValue(
+			makeQuizCard({ examples: [makeQuizExample({ targetPronunciationArpabet: 'bad data' })] })
+		);
+		expect(await revealQuizAnswer(baseRequest)).not.toHaveProperty('pronunciationIpa');
+	});
+
+	it('does not guess between dictionary pronunciations for older examples', async () => {
+		mockBaseReads();
+		vi.mocked(QuizCardRepository.findQuizCardByVocaId).mockResolvedValue(
+			makeQuizCard({
+				examples: [
+					makeQuizExample({ targetFillText: 'read', targetSentenceTemplate: 'I {{---}} books.' })
+				]
+			})
+		);
+		expect(await revealQuizAnswer(baseRequest)).not.toHaveProperty('pronunciationIpa');
+	});
+
 	it('reveals the final answer without recording an additional review result', async () => {
 		mockBaseReads();
 		expect(await revealQuizAnswer(baseRequest)).toEqual({
 			correctAnswer: 'apple',
-			pronunciationText: makeQuizExample().targetPronunciationText
+			pronunciationText: makeQuizExample().targetPronunciationText,
+			pronunciationIpa: '/ˈæpəl/'
 		});
 		expect(ReviewRepository.upsertReview).not.toHaveBeenCalled();
 	});
@@ -174,7 +207,7 @@ describe('quiz.usecase', () => {
 		expect(UserService.saveUser).not.toHaveBeenCalled();
 	});
 
-	it('puts randomized due reviews before queued and selected new words', async () => {
+	it('uses only due reviews when fewer than nine are available', async () => {
 		const reviewed = ['review-2', 'review-1'].map((vocaId) =>
 			makeReview({ _id: `review-${vocaId}`, vocaId, correctCount: 1 })
 		);
@@ -197,7 +230,7 @@ describe('quiz.usecase', () => {
 				makeQuizCard({ vocaId, examples: [makeQuizExample({ _id: `example-${vocaId}` })] })
 			)
 		);
-		vi.spyOn(QuizCardRepository, 'findNewQuizCandidates').mockResolvedValue([
+		const findCandidates = vi.spyOn(QuizCardRepository, 'findNewQuizCandidates').mockResolvedValue([
 			{
 				voca: makeVoca({ _id: 'selected-new' }),
 				quizCard: makeQuizCard({
@@ -211,20 +244,14 @@ describe('quiz.usecase', () => {
 
 		expect(result.encounters.map((encounter) => encounter.vocaId)).toEqual([
 			'review-2',
-			'review-1',
-			'queued-new',
-			'selected-new'
+			'review-1'
 		]);
-		expect(result.encounters.map((encounter) => encounter.isNew)).toEqual([
-			false,
-			false,
-			true,
-			true
-		]);
+		expect(result.encounters.every((encounter) => !encounter.isNew)).toBe(true);
+		expect(findCandidates).not.toHaveBeenCalled();
 	});
 
-	it('does not include new words when ten due reviews fill the session', async () => {
-		const reviewed = Array.from({ length: 10 }, (_, index) => {
+	it('does not include new words when nine due reviews fill the session', async () => {
+		const reviewed = Array.from({ length: 9 }, (_, index) => {
 			const vocaId = `review-${index + 1}`;
 			return makeReview({ _id: `review-record-${index + 1}`, vocaId, correctCount: 1 });
 		});
@@ -247,13 +274,13 @@ describe('quiz.usecase', () => {
 
 		const result = await loadQuizPage(baseRequest.user);
 
-		expect(result.encounters).toHaveLength(10);
+		expect(result.encounters).toHaveLength(9);
 		expect(result.encounters.every((encounter) => !encounter.isNew)).toBe(true);
 		expect(findCandidatesSpy).not.toHaveBeenCalled();
 		expect(ReviewRepository.findReviewedVocaIdsByUserDirection).not.toHaveBeenCalled();
 	});
 
-	it('fills the slot of a due review that has no example', async () => {
+	it('does not fill missing due review slots with new words', async () => {
 		const reviewed = Array.from({ length: 10 }, (_, index) =>
 			makeReview({ vocaId: `due-${index}`, correctCount: 1 })
 		);
@@ -286,12 +313,9 @@ describe('quiz.usecase', () => {
 			'due-5',
 			'due-6',
 			'due-7',
-			'due-8',
-			'due-9',
-			'new-word'
+			'due-8'
 		]);
-		expect(candidates).toHaveBeenCalledOnce();
-		expect(candidates).toHaveBeenCalledWith(expect.objectContaining({ limit: 1 }));
+		expect(candidates).not.toHaveBeenCalled();
 	});
 
 	it('does not save a quiz result for a word with a pending report from any user', async () => {
@@ -312,6 +336,16 @@ describe('quiz.usecase', () => {
 		await expect(passQuizAnswer(baseRequest)).rejects.toThrow(
 			'신고 처리 중이거나 퀴즈에서 제외된 단어는 학습 기록에 저장할 수 없습니다.'
 		);
+		expect(ReviewRepository.upsertReview).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{ utilityScore: 1.9 },
+		{ utilityScore: 0 },
+		{ utilityScore: 4, scoreEvaluationDeferred: true }
+	])('does not save a result for excluded or deferred scoring: %o', async (attributes) => {
+		vi.mocked(VocaRepository.getVocaById).mockResolvedValue(makeVoca(attributes));
+		await expect(passQuizAnswer(baseRequest)).rejects.toThrow('퀴즈에서 제외된 단어');
 		expect(ReviewRepository.upsertReview).not.toHaveBeenCalled();
 	});
 
@@ -340,7 +374,7 @@ describe('quiz.usecase', () => {
 			'promptLang',
 			'ko',
 			expect.any(Date),
-			10,
+			9,
 			['voca-1']
 		);
 	});
@@ -363,7 +397,7 @@ describe('quiz.usecase', () => {
 		);
 	});
 
-	it('requests ten candidates regardless of the former new-word quota', async () => {
+	it('requests nine candidates regardless of the former new-word quota', async () => {
 		vi.spyOn(ReviewRepository, 'findDueReviewGroupsByUser').mockResolvedValue({
 			reviewed: [],
 			new: []
@@ -377,7 +411,7 @@ describe('quiz.usecase', () => {
 
 		expect(findCandidatesSpy).toHaveBeenCalledWith(
 			expect.objectContaining({
-				limit: 10
+				limit: 9
 			})
 		);
 	});

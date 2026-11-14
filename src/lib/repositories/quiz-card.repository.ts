@@ -42,9 +42,11 @@ export function calculateQuizDifficultyQuotas(
 	if (limit <= 0) return [];
 
 	const baseDifficulty = Math.trunc(clampNumber(currentLevel, MIN_LEVEL, MAX_LEVEL));
-	const easyCount = Math.round(limit * 0.2);
-	const currentCount = Math.round(limit * 0.4);
-	const harderCount = Math.max(0, limit - easyCount - currentCount);
+	const eachCount = Math.floor(limit / 3);
+	const remainder = limit % 3;
+	const easyCount = eachCount;
+	const currentCount = eachCount + (remainder >= 1 ? 1 : 0);
+	const harderCount = eachCount + (remainder >= 2 ? 1 : 0);
 	const countsByDifficulty = new Map<number, number>();
 	const addCount = (difficultyLevel: number, count: number) => {
 		const normalizedDifficulty = Math.trunc(clampNumber(difficultyLevel, MIN_LEVEL, MAX_LEVEL));
@@ -106,6 +108,7 @@ async function findPreselectedVocas(input: {
 			const filter = {
 				...(input.targetLang == null ? {} : { targetLang: input.targetLang }),
 				utilityScore: { $gte: MIN_RECOMMENDED_UTILITY_SCORE },
+				scoreEvaluationDeferred: { $ne: true },
 				quizExcludedByReportId: { $exists: false },
 				...(input.excludedVocaIds.length === 0 ? {} : { _id: { $nin: input.excludedVocaIds } })
 			};

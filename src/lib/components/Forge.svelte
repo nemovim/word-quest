@@ -18,7 +18,7 @@
 		UPGRADE_GAINS,
 		availableUpgradeLimit,
 		rebirthCost,
-		successfulUpgradeLimit,
+		rebirthUpgradeTarget,
 		upgradeChance,
 		upgradeCost,
 		vocabularyUpgradeLimit,
@@ -102,17 +102,16 @@
 	const level = $derived(levels[selected]);
 	const cost = $derived(upgradeCost(level, selected, rate));
 	const chance = $derived(upgradeChance(rate, selected));
-	const maxSuccessfulUpgrades = $derived(successfulUpgradeLimit(currentGame.rebirthCount));
-	const allowedSuccessfulUpgrades = $derived(
+	const rebirthTarget = $derived(rebirthUpgradeTarget(currentGame.rebirthCount));
+	const maxSuccessfulUpgrades = $derived(
 		availableUpgradeLimit(currentLevel, currentGame.rebirthCount)
 	);
 	const hasRequiredVocabularyLevel = $derived(
-		vocabularyUpgradeLimit(currentLevel) >= maxSuccessfulUpgrades
+		vocabularyUpgradeLimit(currentLevel) >= rebirthTarget
 	);
-	const requiredVocabularyLevel = $derived((maxSuccessfulUpgrades / 10).toFixed(1));
-	const upgradeLimitReached = $derived(
-		currentGame.successfulUpgradeCount >= allowedSuccessfulUpgrades
-	);
+	const requiredVocabularyLevel = $derived((rebirthTarget / 10).toFixed(1));
+	const upgradeLimitReached = $derived(currentGame.successfulUpgradeCount >= maxSuccessfulUpgrades);
+	const selectedUpgradeLimitReached = $derived(selected !== 'chance' && upgradeLimitReached);
 	const nextRebirthCost = $derived(rebirthCost(currentGame.rebirthCount + 1));
 	const rebirthLacksResources = $derived(
 		currentGame.gold < nextRebirthCost.gold ||
@@ -284,7 +283,14 @@
 	<form
 		method="POST"
 		use:enhance={({ cancel }) => {
-			if (busy || phase !== 'idle' || capped || lacking || uncharged || upgradeLimitReached) {
+			if (
+				busy ||
+				phase !== 'idle' ||
+				capped ||
+				lacking ||
+				uncharged ||
+				selectedUpgradeLimitReached
+			) {
 				cancel();
 				return;
 			}
@@ -343,16 +349,19 @@
 		</div>
 		<button
 			class="button upgrade"
-			disabled={busy || phase !== 'idle' || lacking || capped || uncharged || upgradeLimitReached}
+			disabled={busy ||
+				phase !== 'idle' ||
+				lacking ||
+				capped ||
+				uncharged ||
+				selectedUpgradeLimitReached}
 			aria-busy={pending === 'upgrade'}
 		>
 			<span class="upgrade-title"
 				>{pending === 'upgrade'
 					? '강화 중…'
-					: upgradeLimitReached
-						? hasRequiredVocabularyLevel
-							? '환생 필요'
-							: `레벨 ${requiredVocabularyLevel} 필요`
+					: selectedUpgradeLimitReached
+						? '강화 한도 도달'
 						: capped
 							? '최대치 도달'
 							: `${selectedUpgrade.name} 강화`}</span
@@ -364,10 +373,8 @@
 				{#if cost.stones}💎{cost.stones}{/if}
 			</span>
 		</button>
-		{#if upgradeLimitReached && !hasRequiredVocabularyLevel}
-			<small class="short">어휘 레벨 {requiredVocabularyLevel} 이상부터 강화 한도가 늘어요.</small>
-		{:else if upgradeLimitReached}<small class="short"
-				>성공 강화 한도에 도달했어요. 자원을 모아 환생해 주세요.</small
+		{#if selectedUpgradeLimitReached}<small class="short"
+				>성공 강화 한도에 도달했어요. 환생하거나 어휘 레벨을 올려 주세요.</small
 			>{:else if uncharged}<small class="short">골드로 성공률을 먼저 충전해 주세요.</small
 			>{:else if lacking && !capped}<small class="short">재료가 부족해요.</small>{/if}
 	</form>
@@ -413,7 +420,7 @@
 				<span class="eyebrow">다음 환생 {currentGame.rebirthCount + 1}회</span>
 				<h2 id="rebirth-title">환생</h2>
 			</div>
-			<strong>강화 {currentGame.successfulUpgradeCount} / {maxSuccessfulUpgrades}</strong>
+			<strong>강화 {currentGame.successfulUpgradeCount} / {rebirthTarget}</strong>
 		</div>
 		<p class="section-note">
 			환생하면 자원·장비 강화·상자·탐험 진행을 초기화하고, 기본 능력치와 획득량 강화는 유지해요.
@@ -444,7 +451,7 @@
 				disabled={busy ||
 					phase !== 'idle' ||
 					!hasRequiredVocabularyLevel ||
-					currentGame.successfulUpgradeCount < maxSuccessfulUpgrades ||
+					currentGame.successfulUpgradeCount < rebirthTarget ||
 					rebirthLacksResources}
 			>
 				<span class="upgrade-title">{pending === 'rebirth' ? '환생 중…' : '환생하기'}</span>
@@ -453,11 +460,11 @@
 		</form>
 		{#if !hasRequiredVocabularyLevel}
 			<small class="short">
-				어휘 레벨 {requiredVocabularyLevel} 이상부터 강화 한도 {maxSuccessfulUpgrades}회와 환생이
-				열려요. 현재 레벨에서는 최대 {allowedSuccessfulUpgrades}회까지 강화할 수 있어요.
+				현재 최대 {maxSuccessfulUpgrades}회까지 강화할 수 있어요. 어휘 레벨 {requiredVocabularyLevel}
+				이상부터 다음 환생이 가능해요.
 			</small>
-		{:else if currentGame.successfulUpgradeCount < maxSuccessfulUpgrades}
-			<small class="short">성공 강화 {maxSuccessfulUpgrades}회가 되면 환생할 수 있어요.</small>
+		{:else if currentGame.successfulUpgradeCount < rebirthTarget}
+			<small class="short">성공 강화 {rebirthTarget}회가 되면 환생할 수 있어요.</small>
 		{:else if rebirthLacksResources}
 			<small class="short">환생 재료가 부족해요.</small>
 		{/if}

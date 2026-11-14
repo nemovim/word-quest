@@ -52,19 +52,24 @@ describe('quiz-card.repository', () => {
 		expect(calculateQuizDifficultyWindow(5.9)).toEqual({ lower: 4, upper: 6, spread: 2 });
 	});
 
-	it('allocates 20% easier, 40% current, and 40% harder vocas', () => {
-		expect(calculateQuizDifficultyQuotas(5.9, 10)).toEqual([
-			{ difficultyLevel: 4, count: 2 },
-			{ difficultyLevel: 5, count: 4 },
-			{ difficultyLevel: 6, count: 4 }
+	it('allocates equally across easier, current, and harder vocas', () => {
+		expect(calculateQuizDifficultyQuotas(5.9, 9)).toEqual([
+			{ difficultyLevel: 4, count: 3 },
+			{ difficultyLevel: 5, count: 3 },
+			{ difficultyLevel: 6, count: 3 }
 		]);
-		expect(calculateQuizDifficultyQuotas(1, 10)).toEqual([
+		expect(calculateQuizDifficultyQuotas(1, 9)).toEqual([
 			{ difficultyLevel: 1, count: 6 },
-			{ difficultyLevel: 2, count: 4 }
+			{ difficultyLevel: 2, count: 3 }
 		]);
-		expect(calculateQuizDifficultyQuotas(10, 10)).toEqual([
-			{ difficultyLevel: 9, count: 2 },
-			{ difficultyLevel: 10, count: 8 }
+		expect(calculateQuizDifficultyQuotas(10, 9)).toEqual([
+			{ difficultyLevel: 9, count: 3 },
+			{ difficultyLevel: 10, count: 6 }
+		]);
+		expect(calculateQuizDifficultyQuotas(5, 2)).toEqual([
+			{ difficultyLevel: 4, count: 0 },
+			{ difficultyLevel: 5, count: 1 },
+			{ difficultyLevel: 6, count: 1 }
 		]);
 	});
 
@@ -147,13 +152,15 @@ describe('quiz-card.repository', () => {
 		expect(vocaFindMock).toHaveBeenCalledTimes(7);
 		expect(vocaFindMock).toHaveBeenCalledWith({
 			$or: [{ difficultyLevel: { $gte: 3.5, $lt: 4 } }, { difficultyLevel: { $gt: 4, $lt: 4.5 } }],
-			utilityScore: { $gte: 1 },
+			utilityScore: { $gte: 2 },
+			scoreEvaluationDeferred: { $ne: true },
 			quizExcludedByReportId: { $exists: false },
 			_id: { $nin: ['voca-reviewed'] }
 		});
 		expect(vocaFindMock).toHaveBeenCalledWith({
 			difficultyLevel: 4,
-			utilityScore: { $gte: 1 },
+			utilityScore: { $gte: 2 },
+			scoreEvaluationDeferred: { $ne: true },
 			quizExcludedByReportId: { $exists: false },
 			_id: { $nin: ['voca-reviewed'] }
 		});

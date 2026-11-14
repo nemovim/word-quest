@@ -198,7 +198,7 @@ function normalizeAdminDraft(
 	if (!Object.values(PARTS_OF_SPEECH).includes(proposedVoca.partOfSpeech)) {
 		throw new Error('품사 값이 올바르지 않습니다.');
 	}
-	const proposedExample = selected.has(QUIZ_REPORT_APPLY_SECTIONS.EXAMPLE)
+	let proposedExample = selected.has(QUIZ_REPORT_APPLY_SECTIONS.EXAMPLE)
 		? normalizeQuizReportExampleDraft(draft.proposedExample, currentVoca.targetLang, currentExample)
 		: currentExample;
 	const hasVocaChange = VOCA_DRAFT_FIELDS.some(
@@ -207,6 +207,10 @@ function normalizeAdminDraft(
 	const pairChanged = (['sourceText', 'partOfSpeech', 'targetText'] as const).some(
 		(field) => proposedVoca[field] !== currentVoca[field]
 	);
+	if (pairChanged) {
+		proposedExample = { ...proposedExample };
+		delete proposedExample.targetPronunciationArpabet;
+	}
 	if (pairChanged && !selected.has(QUIZ_REPORT_APPLY_SECTIONS.EXAMPLE)) {
 		throw new Error('단어나 품사를 바꿀 때는 새 예문도 함께 적용해야 합니다.');
 	}

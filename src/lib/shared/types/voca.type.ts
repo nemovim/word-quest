@@ -27,6 +27,7 @@ export type VocaCreate = {
 	utilityScore: number | null;
 	scoreReviewCount?: number;
 	scoreEvaluatedAt?: Date | null;
+	scoreEvaluationDeferred?: boolean;
 	quizExcludedByReportId?: string;
 };
 

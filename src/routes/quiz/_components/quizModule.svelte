@@ -317,6 +317,7 @@
 				<small>마지막 문제의 정답</small>
 				<strong>{finalAnswer}</strong>
 				{#if result?.pronunciationText}<small>[{result.pronunciationText}]</small>{/if}
+				{#if result?.pronunciationIpa}<small>영어 발음 {result.pronunciationIpa}</small>{/if}
 				{#if answerParts}<p>{answerParts.before}<b>{finalAnswer}</b>{answerParts.after}</p>{/if}
 			</div>
 		{/if}

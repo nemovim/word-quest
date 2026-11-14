@@ -5,6 +5,9 @@ import type { QuizCardCreate, QuizExample } from '$lib/shared/types/quiz-card.ty
 import type { QuizEncounter } from '$lib/shared/types/quiz.type';
 import type { PartOfSpeech, Voca } from '$lib/shared/types/voca.type';
 
+import { scoreVocaWithDecisionModel } from '$lib/server/decision-voca-scoring';
+import { queueDeferredExample } from '$lib/server/deferred-example';
+import { reviewExamplesWithLuna } from '$lib/server/example-luna-review';
 import { sendOpenRouterJson } from '$lib/server/openrouter';
 import {
 	AI_JUDGE_REASON_CODES,
@@ -25,6 +28,7 @@ export type GeneratedExampleText = {
 	fullSentence: string;
 	answerSurface: string;
 	pronunciationText: string;
+	targetPronunciationArpabet?: string;
 };
 
 export type GeneratedQuizExample = {
@@ -128,10 +132,7 @@ const EXAMPLE_RULES_PROMPT =
 	'If sourceText is unnatural in a context, rewrite the whole context instead of replacing the headword. ' +
 	'Across the examples, prefer natural surface-form variety when the lexeme naturally supports it, ' +
 	'but NEVER force awkward variation. ' +
-	'pronunciationText is required for answerSurface only. ' +
-	'For Korean answers, copy the Korean answerSurface. ' +
-	'For non-Korean answers, pronunciationText MUST be a Hangul phonetic transcription ' +
-	'(appropriate→어프로프리엇); NEVER copy the original script or use IPA.';
+	'Focus on the sentences and their answer spans.';
 
 const GENERATE_SCHEMA = {
 	type: 'object',
@@ -156,15 +157,11 @@ const GENERATE_SCHEMA = {
 						items: {
 							type: 'object',
 							additionalProperties: false,
-							required: ['languageCode', 'fullSentence', 'answerSurface', 'pronunciationText'],
+							required: ['languageCode', 'fullSentence', 'answerSurface'],
 							properties: {
 								languageCode: { type: 'string' },
 								fullSentence: { type: 'string' },
-								answerSurface: { type: 'string' },
-								pronunciationText: {
-									type: 'string',
-									pattern: HANGUL_PRONUNCIATION_PATTERN_SOURCE
-								}
+								answerSurface: { type: 'string' }
 							}
 						}
 					}
@@ -406,7 +403,11 @@ function buildTemplateFromGeneratedText(
 	};
 }
 
-function normalizeExample(example: GeneratedQuizExample, targetLang: LanguageCode): QuizExample {
+function normalizeExample(
+	example: GeneratedQuizExample,
+	targetLang: LanguageCode,
+	validatePronunciation = true
+): QuizExample {
 	const textsByLang = new Map<LanguageCode, GeneratedExampleText>();
 
 	for (const generatedText of example.texts) {
@@ -429,7 +430,12 @@ function normalizeExample(example: GeneratedQuizExample, targetLang: LanguageCod
 		sourceFillText: normalizedSourceText.fillText,
 		targetSentenceTemplate: normalizedTargetText.sentenceTemplate,
 		targetFillText: normalizedTargetText.fillText,
-		targetPronunciationText: validatePronunciationText(targetText.pronunciationText),
+		targetPronunciationText: validatePronunciation
+			? validatePronunciationText(targetText.pronunciationText)
+			: '',
+		...(targetText.targetPronunciationArpabet
+			? { targetPronunciationArpabet: targetText.targetPronunciationArpabet }
+			: {}),
 		reportCount: 0,
 		addedAt: new Date().toISOString()
 	};
@@ -468,7 +474,7 @@ function validateSeedForQuizCard(
 	const validSeed = validateSeed(seed, true);
 	const validExamples = validSeed.examples.filter((example) => {
 		try {
-			const normalizedExample = normalizeExample(example, input.targetLang);
+			const normalizedExample = normalizeExample(example, input.targetLang, false);
 
 			if (
 				input.targetLang === LANGUAGE_CODES.EN &&
@@ -610,7 +616,10 @@ function validateCustomVocaValidation(
 	return validation;
 }
 
-function requestQuizCardSeed(messages: OpenRouterMessage[], allowInvalidUtilityScore = false) {
+async function requestQuizCardSeed(
+	messages: OpenRouterMessage[],
+	allowInvalidUtilityScore = false
+) {
 	const schema = allowInvalidUtilityScore
 		? {
 				...GENERATE_SCHEMA,
@@ -621,11 +630,21 @@ function requestQuizCardSeed(messages: OpenRouterMessage[], allowInvalidUtilityS
 			}
 		: GENERATE_SCHEMA;
 
-	return sendOpenRouterJson<QuizCardSeed>({
+	const seed = await sendOpenRouterJson<QuizCardSeed>({
 		schemaName: 'word_quest_pair_voca_examples',
 		schema,
 		messages
 	});
+	return {
+		...seed,
+		examples: seed.examples.map((example) => ({
+			...example,
+			texts: example.texts.map((text) => ({
+				...text,
+				pronunciationText: text.languageCode === KOREAN_LANGUAGE_CODE ? text.answerSurface : ''
+			}))
+		}))
+	};
 }
 
 function requestCustomVocaValidation(messages: OpenRouterMessage[]) {
@@ -686,7 +705,7 @@ export async function generateQuizCardSeed(
 ): Promise<QuizCardSeed> {
 	const developerPrompt = buildGenerateDeveloperPrompt();
 
-	return requestValidatedJson({
+	const seed = await requestValidatedJson<QuizCardSeed>({
 		buildRepairLines: (previousSeed, validationError) =>
 			buildRepairSeedLines(input, previousSeed, validationError),
 		developerPrompt,
@@ -694,6 +713,70 @@ export async function generateQuizCardSeed(
 		userContent: buildGenerateSeedLines(input),
 		validate: (seed) => validateSeedForQuizCard(seed, input)
 	});
+	if (seed.examples.length === 0) return seed;
+	const exampleReviews = await reviewExamplesWithLuna(
+		seed.examples.map((example) => {
+			const source = example.texts.find((text) => text.languageCode === KOREAN_LANGUAGE_CODE);
+			const target = example.texts.find((text) => text.languageCode === input.targetLang);
+			if (!source || !target) throw new Error('Generated example is missing a language.');
+			return {
+				...input,
+				sourceSentence: source.fullSentence,
+				sourceAnswer: source.answerSurface,
+				targetSentence: target.fullSentence,
+				targetAnswer: target.answerSurface,
+				targetPronunciation: target.pronunciationText
+			};
+		})
+	);
+	for (let index = 0; index < exampleReviews.length; index++) {
+		const review = exampleReviews[index];
+		const target = seed.examples[index].texts.find(
+			(text) => text.languageCode === input.targetLang
+		);
+		if (target && 'targetPronunciation' in review && review.targetPronunciation)
+			target.pronunciationText = review.targetPronunciation;
+		if (target && review.targetPronunciationArpabet)
+			target.targetPronunciationArpabet = review.targetPronunciationArpabet;
+	}
+	if (exampleReviews.some((review) => review.status === 'deferred')) {
+		for (let index = 0; index < exampleReviews.length; index++) {
+			const review = exampleReviews[index];
+			if (review.status !== 'deferred') continue;
+			const source = seed.examples[index].texts.find(
+				(text) => text.languageCode === KOREAN_LANGUAGE_CODE
+			)!;
+			const target = seed.examples[index].texts.find(
+				(text) => text.languageCode === input.targetLang
+			)!;
+			await queueDeferredExample(
+				{
+					...input,
+					sourceSentence: source.fullSentence,
+					sourceAnswer: source.answerSurface,
+					targetSentence: target.fullSentence,
+					targetAnswer: target.answerSurface,
+					targetPronunciation: target.pronunciationText
+				},
+				null,
+				review.attempts,
+				'reason' in review ? review.reason : undefined
+			);
+		}
+	}
+	const examples = seed.examples.filter((_, index) => exampleReviews[index].accepted);
+	if (examples.length === 0) {
+		if (exampleReviews.some((review) => review.status === 'deferred'))
+			throw new Error('예문 검토 결과가 불확실해 관리자 보류함에 저장했어요.');
+		throw new NoValidQuizExamplesError();
+	}
+	const score = await scoreVocaWithDecisionModel(input);
+	return {
+		...seed,
+		examples,
+		difficultyLevel: score.difficultyLevel,
+		utilityScore: score.utilityScore
+	};
 }
 
 export async function validateCustomVocaInput(
