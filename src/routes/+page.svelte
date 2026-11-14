@@ -61,60 +61,81 @@
 </script>
 
 <div class="dashboard">
-	<section class="overview" aria-label="학습 현황">
-		<header>
-			<div>
-				<small>나의 어휘 레벨</small>
-				<h1>{(Math.floor(data.user.currentLevel * 100) / 100).toFixed(2)}</h1>
+	<div class="left-column">
+		<section class="overview" aria-label="학습 현황">
+			<header>
+				<div>
+					<small>나의 어휘 레벨</small>
+					<h1>{(Math.floor(data.user.currentLevel * 100) / 100).toFixed(2)}</h1>
+				</div>
+				<div class="overview-corner">
+					<span>최근 7일 {weeklyDelta}</span>
+				</div>
+			</header>
+			<div class="counts">
+				{#each notes as note (note.label)}<div>
+						<strong>{note.value}</strong><small>{note.label}</small>
+					</div>{/each}
 			</div>
-			<div class="overview-corner">
-				<span>최근 7일 {weeklyDelta}</span>
+			<div class="adventure-status" aria-label="탐험 현황">
+				<span
+					class="health"
+					aria-label={`체력 ${data.game.player?.hp ?? maxHp} / ${maxHp}`}
+					title="현재 체력 / 최대 체력"
+				>
+					<Heart size={19} fill="currentColor" strokeWidth={1.5} aria-hidden="true" />
+					<strong>{data.game.player?.hp ?? maxHp}<small> / {maxHp}</small></strong>
+				</span>
+				<a
+					href={resolve('/quiz')}
+					aria-label={`보물상자 ${data.game.battle.chests.length}개 보러가기`}
+					title="보물상자"
+				>
+					<svg class="chest-icon" viewBox="0 0 28 26" fill="none" aria-hidden="true">
+						<path d="M3 12V9a6 6 0 0 1 6-6h10a6 6 0 0 1 6 6v3" fill="#d7ab73" />
+						<path d="M3 12h22v10H3Z" fill="#bb8655" />
+						<path
+							d="M3 12V9a6 6 0 0 1 6-6h10a6 6 0 0 1 6 6v13H3V12Zm0 0h22"
+							stroke="#795535"
+							stroke-width="1.7"
+							stroke-linejoin="round"
+						/>
+						<path d="M8 4v17M20 4v17" stroke="#efd49e" stroke-width="2" />
+						<rect x="12" y="10" width="4" height="6" rx="1" fill="#f1d69c" stroke="#8a623b" />
+					</svg>
+					<strong>{data.game.battle.chests.length}</strong>
+				</a>
 			</div>
-		</header>
-		<div class="counts">
-			{#each notes as note (note.label)}<div>
-					<strong>{note.value}</strong><small>{note.label}</small>
-				</div>{/each}
-		</div>
-		<div class="adventure-status" aria-label="탐험 현황">
-			<span
-				class="health"
-				aria-label={`체력 ${data.game.player?.hp ?? maxHp} / ${maxHp}`}
-				title="현재 체력 / 최대 체력"
-			>
-				<Heart size={19} fill="currentColor" strokeWidth={1.5} aria-hidden="true" />
-				<strong>{data.game.player?.hp ?? maxHp}<small> / {maxHp}</small></strong>
-			</span>
-			<a
-				href={resolve('/quiz')}
-				aria-label={`보물상자 ${data.game.battle.chests.length}개 보러가기`}
-				title="보물상자"
-			>
-				<svg class="chest-icon" viewBox="0 0 28 26" fill="none" aria-hidden="true">
-					<path d="M3 12V9a6 6 0 0 1 6-6h10a6 6 0 0 1 6 6v3" fill="#d7ab73" />
-					<path d="M3 12h22v10H3Z" fill="#bb8655" />
-					<path
-						d="M3 12V9a6 6 0 0 1 6-6h10a6 6 0 0 1 6 6v13H3V12Zm0 0h22"
-						stroke="#795535"
-						stroke-width="1.7"
-						stroke-linejoin="round"
-					/>
-					<path d="M8 4v17M20 4v17" stroke="#efd49e" stroke-width="2" />
-					<rect x="12" y="10" width="4" height="6" rx="1" fill="#f1d69c" stroke="#8a623b" />
-				</svg>
-				<strong>{data.game.battle.chests.length}</strong>
-			</a>
-		</div>
-		{#if recoverySeconds > 0}
-			<button class="button explore" disabled
-				>탈진 · 회복 중 {Math.floor(recoverySeconds / 60)}분 {recoverySeconds % 60}초</button
-			>
-		{:else}
-			<a class="button explore" href={resolve('/quiz')}>던전 학습 →</a>
-		{/if}
+			{#if recoverySeconds > 0}
+				<button class="button explore" disabled
+					>탈진 · 회복 중 {Math.floor(recoverySeconds / 60)}분 {recoverySeconds % 60}초</button
+				>
+			{:else}
+				<a class="button explore" href={resolve('/quiz')}>던전 학습 →</a>
+			{/if}
 
-		<small class="total">누적 {summary.totalReviewCount}개 학습</small>
-	</section>
+			<small class="total">누적 {summary.totalReviewCount}개 학습</small>
+		</section>
+		<section class="ranking" aria-labelledby="ranking-title">
+			<header>
+				<h2 id="ranking-title">어휘 레벨 순위</h2>
+				<small>전체 {data.ranking.length}명</small>
+			</header>
+			<ol class="ranking-list">
+				{#each data.ranking as entry, index (index)}
+					<li class:current-user={entry.isCurrentUser}>
+						<span class="rank">{entry.rank}</span>
+						<span class="ranking-name"
+							>{entry.name}{#if entry.isCurrentUser}
+								<small>나</small>{/if}</span
+						>
+						<span class="studied-count">{entry.studiedCount}개 학습</span>
+						<strong>{(Math.floor(entry.level * 100) / 100).toFixed(2)}</strong>
+					</li>
+				{/each}
+			</ol>
+		</section>
+	</div>
 	<Forge
 		game={data.game}
 		currentLevel={data.user.currentLevel}
@@ -210,6 +231,63 @@
 		grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
 		align-items: start;
 		gap: 1.2rem;
+	}
+	.left-column {
+		display: grid;
+		gap: 1.2rem;
+		min-width: 0;
+	}
+	.ranking {
+		padding: 1.2rem;
+		border: 1px solid var(--line);
+		border-radius: 1.2rem;
+		background: var(--paper-soft);
+	}
+	.ranking h2 {
+		margin: 0;
+		font-size: 1rem;
+	}
+	.ranking-list {
+		list-style: none;
+		padding: 0;
+		margin: 0.8rem 0 0;
+		max-height: 18rem;
+		overflow-y: auto;
+	}
+	.ranking-list li {
+		display: grid;
+		grid-template-columns: 2rem minmax(0, 1fr) auto auto;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.55rem 0.4rem;
+		border-bottom: 1px solid var(--line);
+		font-size: 0.9rem;
+	}
+	.ranking-list li:last-child {
+		border-bottom: 0;
+	}
+	.ranking-list .current-user {
+		background: var(--paper);
+		border-radius: 0.5rem;
+	}
+	.rank {
+		color: var(--ink-soft);
+		font-variant-numeric: tabular-nums;
+	}
+	.ranking-name {
+		overflow-wrap: anywhere;
+	}
+	.ranking-name small {
+		color: var(--ink-soft);
+		margin-left: 0.3rem;
+	}
+	.studied-count {
+		color: var(--ink-soft);
+		font-size: 0.75rem;
+		white-space: nowrap;
+	}
+	.ranking-list strong {
+		font-variant-numeric: tabular-nums;
 	}
 	.overview {
 		padding: 1.2rem;

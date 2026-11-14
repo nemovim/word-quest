@@ -4,6 +4,15 @@ import type { LevelReview, ReviewEntity, ReviewCreate } from '$lib/shared/types/
 import ReviewModel from '$lib/models/review.model';
 import { toPojo } from '$lib/shared/utils/general.util';
 
+export async function countStudiedVocasByUser(): Promise<{ userId: string; count: number }[]> {
+	return ReviewModel.aggregate([
+		{ $match: { $or: [{ correctCount: { $gt: 0 } }, { wrongCount: { $gt: 0 } }] } },
+		{ $group: { _id: { userId: '$userId', vocaId: '$vocaId' } } },
+		{ $group: { _id: '$_id.userId', count: { $sum: 1 } } },
+		{ $project: { _id: 0, userId: '$_id', count: 1 } }
+	]);
+}
+
 export async function findReviewsByUserId(userId: string): Promise<ReviewEntity[]> {
 	const documents = await ReviewModel.find({ userId }).sort({ dueAt: 1, createdAt: 1 }).lean();
 	return documents.map(toPojo<ReviewEntity>);

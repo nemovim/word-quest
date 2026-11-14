@@ -4,11 +4,15 @@ import type { Actions, PageServerLoad } from './$types';
 
 import { loadGameView } from '$lib/server/game';
 import { actGame } from '$lib/server/game-actions';
-import { loadSummary } from '$lib/usecases/dashboard.usecase';
+import { loadRanking, loadSummary } from '$lib/usecases/dashboard.usecase';
 
 export const load: PageServerLoad = async ({ locals }) => {
-	const [game, summary] = await Promise.all([loadGameView(locals.user), loadSummary(locals.user)]);
-	return { user: locals.user, game, summary };
+	const [game, summary, ranking] = await Promise.all([
+		loadGameView(locals.user),
+		loadSummary(locals.user),
+		loadRanking(locals.user)
+	]);
+	return { user: locals.user, game, summary, ranking };
 };
 export const actions: Actions = {
 	default: async ({ locals, request }) => {

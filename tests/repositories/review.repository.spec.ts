@@ -10,6 +10,7 @@ vi.mock('$lib/models/review.model', () => ({
 }));
 
 import {
+	countStudiedVocasByUser,
 	countVocasFirstReviewedSince,
 	findDueReviewGroupsByUser,
 	findRecentDistinctAnsweredReviews,
@@ -20,6 +21,17 @@ import {
 describe('review.repository', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+	});
+
+	it('counts distinct answered words for each user', async () => {
+		aggregateMock.mockResolvedValue([{ userId: 'user-1', count: 2 }]);
+		await expect(countStudiedVocasByUser()).resolves.toEqual([{ userId: 'user-1', count: 2 }]);
+		expect(aggregateMock).toHaveBeenCalledWith([
+			{ $match: { $or: [{ correctCount: { $gt: 0 } }, { wrongCount: { $gt: 0 } }] } },
+			{ $group: { _id: { userId: '$userId', vocaId: '$vocaId' } } },
+			{ $group: { _id: '$_id.userId', count: { $sum: 1 } } },
+			{ $project: { _id: 0, userId: '$_id', count: 1 } }
+		]);
 	});
 
 	it('limits level evidence in MongoDB and projects only calculation fields', async () => {

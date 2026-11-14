@@ -4,13 +4,32 @@ import { makeUser } from '../helpers/factories';
 
 import * as QuizReportRepository from '$lib/repositories/quiz-report.repository';
 import * as ReviewRepository from '$lib/repositories/review.repository';
+import * as UserRepository from '$lib/repositories/user.repository';
 import * as VocaRepository from '$lib/repositories/voca.repository';
 import { LONG_TERM_REVIEW_STAGE } from '$lib/shared/types/general.type';
-import { loadSummary } from '$lib/usecases/dashboard.usecase';
+import { loadRanking, loadSummary } from '$lib/usecases/dashboard.usecase';
 
 describe('dashboard.usecase', () => {
 	beforeEach(() => {
 		vi.restoreAllMocks();
+	});
+
+	it('returns shared ranks and only public ranking details', async () => {
+		vi.spyOn(ReviewRepository, 'countStudiedVocasByUser').mockResolvedValue([
+			{ userId: 'me', count: 12 },
+			{ userId: 'third', count: 30 }
+		]);
+		vi.spyOn(UserRepository, 'findUsersForRanking').mockResolvedValue([
+			{ _id: 'first', email: 'alpha@example.com', currentLevel: 3 },
+			{ _id: 'me', email: 'beta@example.org', currentLevel: 3 },
+			{ _id: 'third', email: 'gamma@example.com', currentLevel: 2 }
+		]);
+
+		expect(await loadRanking(makeUser({ _id: 'me' }))).toEqual([
+			{ rank: 1, name: 'alpha', level: 3, studiedCount: 0, isCurrentUser: false },
+			{ rank: 1, name: 'beta', level: 3, studiedCount: 12, isCurrentUser: true },
+			{ rank: 3, name: 'gamma', level: 2, studiedCount: 30, isCurrentUser: false }
+		]);
 	});
 
 	it('passes pending reports and permanently blocked words to the summary', async () => {

@@ -23,6 +23,15 @@ export async function findUsersByIds(userIds: string[]): Promise<UserEntity[]> {
 	return documents.map(toPojo<UserEntity>);
 }
 
+export async function findUsersForRanking(): Promise<
+	Pick<UserEntity, '_id' | 'email' | 'currentLevel'>[]
+> {
+	const documents = await UserModel.find({}, { _id: 1, email: 1, currentLevel: 1 })
+		.sort({ currentLevel: -1, _id: 1 })
+		.lean();
+	return documents.map(toPojo<Pick<UserEntity, '_id' | 'email' | 'currentLevel'>>);
+}
+
 export async function createUser(userId: string, userData: UserCreate): Promise<UserEntity> {
 	const document = await UserModel.create({
 		_id: userId,
