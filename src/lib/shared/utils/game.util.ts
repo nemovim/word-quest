@@ -1,14 +1,14 @@
 import type { MonsterKind } from '$lib/shared/types/combat.type';
 export const WINDOW_MS = 12 * 60 * 60 * 1000;
 export const COMBAT_PERCENT_CAP = 50;
-export const COMBO_RATE_CAP = 15;
+export const COMBO_RATE_CAP = 30;
 export const NORMAL_CHEST_DROP_CHANCE = 5;
-export const GOLEM_STONE_DROP_CHANCE = 25;
+export const GOLEM_STONE_DROP_CHANCE = 40;
 export const CHEST_STONE_GOLD_DIVISOR = 30;
-export const CHEST_COMMON_RESOURCE_BOOST = 1.3;
+export const CHEST_COMMON_RESOURCE_BOOST = 10 / 3;
 export const RESOURCE_YIELD_UPGRADE_GAINS = { min: 5, max: 15, scale: 10 };
 export const RESOURCE_YIELD_UPGRADE_COST = (level: number) => level + 1;
-export const REBIRTH_BASE_COST = { gold: 5000, iron: 300, silver: 100, stones: 10 };
+export const REBIRTH_BASE_COST = { gold: 1000, iron: 200, silver: 50, stones: 10 };
 export const RESOURCE_YIELD_KINDS = ['gold', 'iron', 'silver', 'stones'] as const;
 export type ResourceYieldKind = (typeof RESOURCE_YIELD_KINDS)[number];
 export const RESOURCE_YIELD_NAMES: Record<ResourceYieldKind, string> = {
@@ -31,9 +31,9 @@ export function availableUpgradeLimit(currentLevel: number, rebirthCount: number
 }
 const chanceGain = { min: 4, max: 12, scale: 1 };
 const maxHpGain = { min: 2, max: 6, scale: 1 };
-const attackGain = { min: 1, max: 4, scale: 1 };
+const attackGain = { min: 2, max: 6, scale: 1 };
 const incomeGain = { min: 1, max: 3, scale: 1 };
-const comboGain = { min: 5, max: 15, scale: 10 };
+const comboGain = { min: 10, max: 30, scale: 10 };
 export const UPGRADE_GAINS = {
 	chance: chanceGain,
 	attack: attackGain,
@@ -85,7 +85,7 @@ export function monsterLevel(vocabularyLevel: number): number {
 export function wordCombatAmount(level: number, multiplier: number): number {
 	return Math.floor(Math.min(10, Math.max(1, Number.isFinite(level) ? level : 1)) * multiplier);
 }
-// Fit one curve to 100 HP at Lv.10, 200 at Lv.20, and 3,000 at Lv.100.
+// Scale the existing growth curve to 50% of its original health.
 const MONSTER_HP_EXPONENT = Math.log(29) / Math.log(9);
 
 export function monsterStats(monsterLevel: number, boss = false) {
@@ -95,11 +95,11 @@ export function monsterStats(monsterLevel: number, boss = false) {
 	const x = level / 10 - 1;
 	const growth = x / 2 + (x * x) / 18;
 	const levelProgress = (level - 10) / 90;
-	const maxHp = 100 + Math.round(2900 * levelProgress ** MONSTER_HP_EXPONENT);
+	const maxHp = Math.round((100 + Math.round(2900 * levelProgress ** MONSTER_HP_EXPONENT)) * 0.5);
 	return {
 		level,
 		maxHp: maxHp * (boss ? 4 : 1),
-		rewardMultiplier: 1 + growth * 0.2
+		rewardMultiplier: Math.round((1 + growth * 0.3) * 1e12) / 1e12
 	};
 }
 

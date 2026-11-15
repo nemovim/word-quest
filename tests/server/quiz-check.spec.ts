@@ -4,13 +4,13 @@ import { POST } from '../../src/routes/api/quiz/check/+server';
 import { makeUser, makeVoca } from '../helpers/factories';
 
 import { getVocaById } from '$lib/repositories/voca.repository';
-import { healMonster, hurtPlayer, readExploration, rewardStudy } from '$lib/server/game';
+import { handlePass, hurtPlayer, readExploration, rewardStudy } from '$lib/server/game';
 import { checkQuizAnswer, passQuizAnswer } from '$lib/usecases/quiz.usecase';
 
 vi.mock('$lib/repositories/voca.repository', () => ({ getVocaById: vi.fn() }));
 vi.mock('$lib/server/game', () => ({
 	readExploration: vi.fn(),
-	healMonster: vi.fn(),
+	handlePass: vi.fn(),
 	hurtPlayer: vi.fn(),
 	rewardStudy: vi.fn()
 }));
@@ -30,9 +30,9 @@ it('applies only the manual-pass penalty when the final answer is wrong', async 
 		status: 'pass',
 		correctAnswer: 'apple'
 	} as Awaited<ReturnType<typeof checkQuizAnswer>>);
-	vi.mocked(healMonster).mockResolvedValue({
+	vi.mocked(handlePass).mockResolvedValue({
 		reward: { playerDamage: 12 }
-	} as Awaited<ReturnType<typeof healMonster>>);
+	} as Awaited<ReturnType<typeof handlePass>>);
 	const request = new Request('http://localhost/api/quiz/check', {
 		method: 'POST',
 		body: JSON.stringify({
@@ -54,7 +54,7 @@ it('applies only the manual-pass penalty when the final answer is wrong', async 
 		status: 'pass',
 		combat: { reward: { playerDamage: 12 } }
 	});
-	expect(healMonster).toHaveBeenCalledExactlyOnceWith(
+	expect(handlePass).toHaveBeenCalledExactlyOnceWith(
 		user,
 		'session:attempt',
 		word.difficultyLevel,

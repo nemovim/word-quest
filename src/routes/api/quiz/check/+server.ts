@@ -6,7 +6,7 @@ import type { RequestHandler } from './$types';
 
 import { getUserById } from '$lib/repositories/user.repository';
 import { getVocaById } from '$lib/repositories/voca.repository';
-import { healMonster, hurtPlayer, readExploration, rewardStudy } from '$lib/server/game';
+import { handlePass, hurtPlayer, readExploration, rewardStudy } from '$lib/server/game';
 import { NewVocaLimitError } from '$lib/service/new-voca-limit.service';
 import { checkQuizAnswer, passQuizAnswer } from '$lib/usecases/quiz.usecase';
 
@@ -27,7 +27,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 						exploration
 					)
 				: result.status === 'pass'
-					? await healMonster(
+					? await handlePass(
 							locals.user,
 							`${sessionId}:${actionId}`,
 							word.difficultyLevel ?? 1,

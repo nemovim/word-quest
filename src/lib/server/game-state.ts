@@ -84,7 +84,7 @@ const schema = new mongoose.Schema({
 	lockUntil: { type: Number, default: 0 }
 });
 export const GameModel = mongoose.models.Game ?? mongoose.model('Game', schema);
-const COMBAT_VERSION = 10;
+const COMBAT_VERSION = 12;
 export const DEFAULT_ARMOR: ArmorStats = {
 	maxHp: 100,
 	maxHpUpgrades: 0,
@@ -240,7 +240,7 @@ export async function readGameState(user: User): Promise<GameSnapshot | null> {
 		attackUpgrades: state.attackUpgrades ?? state.weapon,
 		comboUpgrades: state.comboUpgrades ?? 0,
 		comboRate: Math.min(COMBO_RATE_CAP, state.comboRate ?? 0),
-		comboCount: Math.max(0, Math.min(1000, Math.floor(state.comboCount ?? 0))),
+		comboCount: Math.min(Number.MAX_SAFE_INTEGER, nonnegativeInteger(state.comboCount)),
 		rebirthCount: nonnegativeInteger(state.rebirthCount),
 		memoryShards:
 			nonnegativeInteger(state.memoryShards) +

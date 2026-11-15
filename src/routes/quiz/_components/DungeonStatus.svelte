@@ -226,7 +226,7 @@
 				: reward?.damage
 					? `${reward.combo ? `${reward.combo}연계! 추가 피해 +${reward.comboBonus} · ` : '명중!'}골드 +${reward.gold}`
 					: reward?.playerDamage
-						? `${reward.playerCritical ? '몬스터의 치명타! ' : '몬스터의 반격! '}체력 −${reward.playerDamage}${reward.healing ? ` · 몬스터 회복 +${reward.healing}` : ''}`
+						? `몬스터의 반격! 체력 −${reward.playerDamage}${reward.healing ? ` · 몬스터 회복 +${reward.healing}` : ''}`
 						: reward?.healing
 							? `몬스터가 체력을 ${reward.healing} 회복했어요.`
 							: ''}
@@ -237,19 +237,19 @@
 			<p>탈진 전에는 체력이 1분마다 2씩 회복돼요. 탈진하면 10분간 휴식이 필요해요.</p>
 			<p>
 				공격력 {game.attack} · 연계율 {game.comboRate.toFixed(1)}% · 현재 연속 정답
-				{comboCount}회 · 오답 피해: 단어 레벨 ×{battle.boss ? 3 : 2} · 넘기기: 몬스터 회복 ×3 + 치명타
-				반격 (오답 피해 ×2)
+				{comboCount}회 · 오답 피해: 단어 레벨 ×{battle.boss ? 3 : 2} · 넘기기: 일반 반격 + 몬스터 회복 ×3
 			</p>
 			<p>
 				명중 🪙 {(combat?.hitGold ?? game.hitGold ?? 1) * (battle.boss ? 2 : 1)}{battle.boss
 					? ' (보스 ×2)'
-					: ''} · 처치 상자 확률 {NORMAL_CHEST_DROP_CHANCE}% · 상자 ×{monsterStats(
+					: ''} · 처치 보상 ×{monsterStats(battle.level ?? 10).rewardMultiplier.toFixed(2)} · 처치 상자
+				확률 {NORMAL_CHEST_DROP_CHANCE}% · 상자 ×{monsterStats(
 					battle.level ?? 10
 				).rewardMultiplier.toFixed(2)}
 			</p>
 			<p>
 				처치 특성: 슬라임은 골드, 버섯은 철, 박쥐는 은을 줘요. 골렘은
-				{GOLEM_STONE_DROP_CHANCE}% 확률로 강화석을 떨어뜨리고, 보스는 보물상자를 확정으로 남겨요.
+				{GOLEM_STONE_DROP_CHANCE}% 확률로 강화석을 떨어뜨려요. 보스는 무작위 자원과 보물상자를 줘요.
 			</p>
 		</details>
 	</div>

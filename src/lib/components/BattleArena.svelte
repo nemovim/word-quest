@@ -53,7 +53,6 @@
 			class="impact-stage"
 			class:combo={!!reward?.combo}
 			class:hit={!!reward?.damage}
-			class:healing={!!reward?.healing}
 			class:attacking={!!reward?.playerDamage}
 		>
 			<div class="monster" class:defeated>
@@ -77,7 +76,9 @@
 					>{#if reward.combo}<small>{reward.combo}연계 · 추가 피해 +{reward.comboBonus}</small
 						>{/if}−{reward.damage}</b
 				>
-			{:else if reward?.healing}<b class="heal" aria-hidden="true">+{reward.healing}</b>{/if}
+			{:else if reward?.healing}
+				<b class="damage" aria-hidden="true">+{reward.healing}</b>
+			{/if}
 		</div>
 	{/key}
 	<div class="health" class:low={shown.hp > 0 && percent <= 25} class:empty={shown.hp === 0}>
@@ -266,8 +267,7 @@
 		box-shadow: 0 0 8px #f4be56;
 		animation: combo-particles 0.62s var(--delay) both;
 	}
-	.damage,
-	.heal {
+	.damage {
 		position: absolute;
 		z-index: 3;
 		left: 60%;
@@ -289,9 +289,6 @@
 		letter-spacing: 0.08em;
 		margin-bottom: 0.2rem;
 	}
-	.heal {
-		color: #8a713f;
-	}
 	.hit .monster {
 		animation: recoil 0.48s both;
 	}
@@ -311,9 +308,6 @@
 	}
 	.hit .monster.defeated {
 		animation: defeat 0.8s both;
-	}
-	.healing .monster {
-		animation: recover 0.6s both;
 	}
 	.health {
 		grid-column: 2;
@@ -548,8 +542,7 @@
 		.bar-impact {
 			display: none;
 		}
-		.damage,
-		.heal {
+		.damage {
 			font-size: 1rem;
 			top: 0;
 		}

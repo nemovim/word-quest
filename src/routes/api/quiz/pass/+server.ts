@@ -5,7 +5,7 @@ import { parsePassPayload } from '../payload';
 import type { RequestHandler } from './$types';
 
 import { getVocaById } from '$lib/repositories/voca.repository';
-import { healMonster, readExploration } from '$lib/server/game';
+import { handlePass, readExploration } from '$lib/server/game';
 import { NewVocaLimitError } from '$lib/service/new-voca-limit.service';
 import { passQuizAnswer } from '$lib/usecases/quiz.usecase';
 
@@ -17,7 +17,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			getVocaById(payload.vocaId)
 		]);
 		const result = await passQuizAnswer({ ...payload, user: locals.user }, word);
-		const combat = await healMonster(
+		const combat = await handlePass(
 			locals.user,
 			`${sessionId}:${actionId}`,
 			word.difficultyLevel ?? 1,

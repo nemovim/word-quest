@@ -27,7 +27,6 @@ import {
 	monsterLevel,
 	wordCombatAmount,
 	chestMaterialAmount,
-	COMBAT_PERCENT_CAP,
 	NORMAL_CHEST_DROP_CHANCE,
 	GOLEM_STONE_DROP_CHANCE,
 	CHEST_STONE_GOLD_DIVISOR,
@@ -113,12 +112,17 @@ async function mutateCombat(
 	error(409, '다른 요청이 진행 중이에요. 잠시 후 다시 시도해 주세요.');
 }
 const emptyReward = (): StudyReward => ({ gold: 0, iron: 0, stones: 0, damage: 0, clear: null });
-function applyResourceYield(state: GameState, kind: ResourceYieldKind, amount: number): number {
-	const extra = amount * (state.resourceYield[kind] / 100);
-	if (!Number.isFinite(extra)) error(500, '자원 획득량을 계산하지 못했어요.');
-	const whole = Math.floor(extra);
-	const fraction = extra - whole;
-	const total = amount + whole + (fraction > 0 && randomInt(1000) < fraction * 1000 ? 1 : 0);
+function applyResourceYield(
+	state: GameState,
+	kind: ResourceYieldKind,
+	amount: number,
+	multiplier = 1
+): number {
+	const expected = amount * multiplier * (1 + state.resourceYield[kind] / 100);
+	if (!Number.isFinite(expected)) error(500, '자원 획득량을 계산하지 못했어요.');
+	const whole = Math.floor(expected);
+	const fraction = expected - whole;
+	const total = whole + (fraction > 0 && randomInt(1000) < fraction * 1000 ? 1 : 0);
 	if (!Number.isFinite(total)) error(500, '자원 획득량을 계산하지 못했어요.');
 	return total;
 }
@@ -135,8 +139,8 @@ export async function rewardStudy(
 			if (sessionId) assertPlayer(state, sessionId);
 			if (battle.claims.some((claim) => claim.key === `hit:${key}`)) return reward;
 			battle.claims.push({ key: `hit:${key}`, at: Date.now() });
-			state.comboCount = Math.min(1000, state.comboCount + 1);
-			const comboRate = Math.min(COMBAT_PERCENT_CAP, state.comboCount * state.comboRate);
+			state.comboCount = Math.min(Number.MAX_SAFE_INTEGER, state.comboCount + 1);
+			const comboRate = state.comboCount * state.comboRate;
 			const comboBonus =
 				state.comboCount >= 2 && state.comboRate > 0
 					? Math.max(1, Math.floor((state.attack * comboRate) / 100))
@@ -150,29 +154,45 @@ export async function rewardStudy(
 			if (battle.hp === 0) {
 				reward.clear = battle.boss ? 'boss' : 'dungeon';
 				reward.chest = false;
+				const multiplier = monsterStats(battle.level ?? 10).rewardMultiplier;
 				if (battle.boss) {
+					const bonusGold = applyResourceYield(state, 'gold', (15 + randomInt(11)) * 2, multiplier);
+					reward.gold += bonusGold;
+					reward.iron = applyResourceYield(state, 'iron', 6 + randomInt(5), multiplier);
+					reward.silver = applyResourceYield(state, 'silver', 1 + randomInt(3), multiplier);
+					if (randomInt(100) < GOLEM_STONE_DROP_CHANCE)
+						reward.stones = applyResourceYield(state, 'stones', 1, multiplier);
+					state.gold += bonusGold;
+					state.iron += reward.iron;
+					state.silver += reward.silver;
+					state.stones += reward.stones;
 					reward.chest = true;
 					battle.chests.push({ id: randomUUID(), boss: true, level: battle.level ?? 10 });
 				} else {
 					switch (battle.kind ?? 'slime') {
 						case 'slime':
 							{
-								const bonusGold = applyResourceYield(state, 'gold', (5 + randomInt(6)) * 2);
+								const bonusGold = applyResourceYield(
+									state,
+									'gold',
+									(15 + randomInt(11)) * 2,
+									multiplier
+								);
 								reward.gold += bonusGold;
 								state.gold += bonusGold;
 							}
 							break;
 						case 'mushroom':
-							reward.iron = applyResourceYield(state, 'iron', 3 + randomInt(4));
+							reward.iron = applyResourceYield(state, 'iron', 6 + randomInt(5), multiplier);
 							state.iron += reward.iron;
 							break;
 						case 'bat':
-							reward.silver = applyResourceYield(state, 'silver', 1 + randomInt(3));
+							reward.silver = applyResourceYield(state, 'silver', 1 + randomInt(3), multiplier);
 							state.silver += reward.silver;
 							break;
 						case 'golem':
 							if (randomInt(100) < GOLEM_STONE_DROP_CHANCE) {
-								reward.stones = applyResourceYield(state, 'stones', 1);
+								reward.stones = applyResourceYield(state, 'stones', 1, multiplier);
 								state.stones += reward.stones;
 							}
 							break;
@@ -203,7 +223,7 @@ export async function rewardStudy(
 		loaded
 	);
 }
-export async function healMonster(
+export async function handlePass(
 	user: User,
 	key: string,
 	level = 3,
@@ -214,7 +234,7 @@ export async function healMonster(
 		user,
 		(state, battle) => {
 			if (sessionId) assertPlayer(state, sessionId);
-			const reward = { ...emptyReward(), healing: 0, playerDamage: 0, playerCritical: !!sessionId };
+			const reward = { ...emptyReward(), healing: 0, playerDamage: 0, playerCritical: false };
 			if (battle.claims.some((claim) => claim.key === `pass:${key}`)) return reward;
 			state.comboCount = 0;
 			battle.claims.push({ key: `pass:${key}`, at: Date.now() });
@@ -222,7 +242,7 @@ export async function healMonster(
 			battle.hp += reward.healing;
 			if (sessionId) {
 				const player = assertPlayer(state, sessionId);
-				reward.playerDamage = damagePlayer(player, level, battle.boss, state.armor.defense, true);
+				reward.playerDamage = damagePlayer(player, level, battle.boss, state.armor.defense);
 			}
 			return reward;
 		},
@@ -246,10 +266,9 @@ function damagePlayer(
 	player: PlayerHealth,
 	level: number,
 	boss: boolean,
-	defense: number,
-	critical = false
+	defense: number
 ) {
-	const incoming = wordCombatAmount(level, boss ? 3 : 2) * (critical ? 2 : 1);
+	const incoming = Math.round(wordCombatAmount(level, boss ? 3 : 2) * 0.9);
 	const reduced = Math.max(1, Math.round(incoming * (1 - defense / 100)));
 	const damage = Math.min(player.hp, reduced);
 	player.hp -= damage;
