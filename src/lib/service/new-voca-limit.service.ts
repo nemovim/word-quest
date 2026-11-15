@@ -1,7 +1,9 @@
 import {
 	countVocasFirstReviewedSince,
+	findReviewVocaIdsByUser,
 	hasReviewByUserAndVoca
 } from '$lib/repositories/review.repository';
+import { findPermanentlyExcludedVocaIds } from '$lib/repositories/voca.repository';
 
 export const NEW_VOCA_LIMIT = 40;
 export const NEW_VOCA_WINDOW_MS = 12 * 60 * 60 * 1000;
@@ -20,10 +22,13 @@ function getWindowStart(now: Date): Date {
 }
 
 export async function getRemainingNewVocaCount(userId: string, now: Date): Promise<number> {
+	const reviewVocaIds = await findReviewVocaIdsByUser(userId);
+	const excluded = await findPermanentlyExcludedVocaIds(reviewVocaIds);
 	const currentCount = await countVocasFirstReviewedSince(
 		userId,
 		getWindowStart(now),
-		NEW_VOCA_LIMIT
+		NEW_VOCA_LIMIT,
+		excluded
 	);
 	return Math.max(0, NEW_VOCA_LIMIT - currentCount);
 }

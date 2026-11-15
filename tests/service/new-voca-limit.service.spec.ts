@@ -7,7 +7,12 @@ const { countVocasFirstReviewedSinceMock, hasReviewByUserAndVocaMock } = vi.hois
 
 vi.mock('$lib/repositories/review.repository', () => ({
 	countVocasFirstReviewedSince: countVocasFirstReviewedSinceMock,
-	hasReviewByUserAndVoca: hasReviewByUserAndVocaMock
+	hasReviewByUserAndVoca: hasReviewByUserAndVocaMock,
+	findReviewVocaIdsByUser: vi.fn().mockResolvedValue([])
+}));
+
+vi.mock('$lib/repositories/voca.repository', () => ({
+	findPermanentlyExcludedVocaIds: vi.fn().mockResolvedValue([])
 }));
 
 import {
@@ -30,7 +35,8 @@ describe('new voca limit service', () => {
 		expect(countVocasFirstReviewedSinceMock).toHaveBeenCalledWith(
 			'user-1',
 			new Date('2026-07-24T00:00:00.000Z'),
-			40
+			40,
+			[]
 		);
 	});
 

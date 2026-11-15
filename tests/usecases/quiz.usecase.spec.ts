@@ -685,7 +685,11 @@ describe('quiz.usecase', () => {
 
 		await checkQuizAnswer({ ...baseRequest, user: currentUser, answerText: 'apple' });
 
-		expect(ReviewRepository.findRecentDistinctAnsweredReviews).toHaveBeenCalledWith('user-1', 500);
+		expect(ReviewRepository.findRecentDistinctAnsweredReviews).toHaveBeenCalledWith(
+			'user-1',
+			500,
+			[]
+		);
 		expect(VocaRepository.findVocaDifficultiesByIds).toHaveBeenCalledWith(['voca-1']);
 		expect(UserService.saveUser).toHaveBeenCalledWith(nextUser);
 	});

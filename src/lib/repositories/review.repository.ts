@@ -4,9 +4,16 @@ import type { LevelReview, ReviewEntity, ReviewCreate } from '$lib/shared/types/
 import ReviewModel from '$lib/models/review.model';
 import { toPojo } from '$lib/shared/utils/general.util';
 
-export async function countStudiedVocasByUser(): Promise<{ userId: string; count: number }[]> {
+export async function countStudiedVocasByUser(
+	excludedVocaIds: string[] = []
+): Promise<{ userId: string; count: number }[]> {
 	return ReviewModel.aggregate([
-		{ $match: { $or: [{ correctCount: { $gt: 0 } }, { wrongCount: { $gt: 0 } }] } },
+		{
+			$match: {
+				$or: [{ correctCount: { $gt: 0 } }, { wrongCount: { $gt: 0 } }],
+				...(excludedVocaIds.length ? { vocaId: { $nin: excludedVocaIds } } : {})
+			}
+		},
 		{ $group: { _id: { userId: '$userId', vocaId: '$vocaId' } } },
 		{ $group: { _id: '$_id.userId', count: { $sum: 1 } } },
 		{ $project: { _id: 0, userId: '$_id', count: 1 } }
@@ -63,12 +70,14 @@ export async function findDueReviewGroupsByUser(
 
 export async function findRecentDistinctAnsweredReviews(
 	userId: string,
-	limit: number
+	limit: number,
+	excludedVocaIds: string[] = []
 ): Promise<LevelReview[]> {
 	const documents = await ReviewModel.aggregate([
 		{
 			$match: {
 				userId,
+				...(excludedVocaIds.length ? { vocaId: { $nin: excludedVocaIds } } : {}),
 				$or: [{ correctCount: { $gt: 0 } }, { wrongCount: { $gt: 0 } }]
 			}
 		},
@@ -142,7 +151,9 @@ export async function getReviewSummary(
 			? { $literal: true }
 			: { $not: [{ $in: ['$vocaId', excludedVocaIds] }] };
 	const [summary] = await ReviewModel.aggregate([
-		{ $match: { userId } },
+		{
+			$match: { userId, ...(excludedVocaIds.length ? { vocaId: { $nin: excludedVocaIds } } : {}) }
+		},
 		{
 			$group: {
 				_id: '$vocaId',
@@ -265,10 +276,11 @@ export async function hasReviewByUserAndVoca(userId: string, vocaId: string): Pr
 export async function countVocasFirstReviewedSince(
 	userId: string,
 	since: Date,
-	limit: number
+	limit: number,
+	excludedVocaIds: string[] = []
 ): Promise<number> {
 	const [result] = await ReviewModel.aggregate([
-		{ $match: { userId } },
+		{ $match: { userId, ...(excludedVocaIds.length ? { vocaId: { $nin: excludedVocaIds } } : {}) } },
 		{ $group: { _id: '$vocaId', firstReviewedAt: { $min: '$createdAt' } } },
 		{ $match: { firstReviewedAt: { $gte: since } } },
 		{ $limit: limit },

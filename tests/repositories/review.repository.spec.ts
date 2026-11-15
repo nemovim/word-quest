@@ -53,6 +53,14 @@ describe('review.repository', () => {
 		});
 	});
 
+	it('filters excluded words before selecting recent level evidence', async () => {
+		aggregateMock.mockResolvedValue([]);
+		await findRecentDistinctAnsweredReviews('user-1', 500, ['excluded']);
+		const pipeline = aggregateMock.mock.calls[0][0];
+		expect(pipeline[0].$match.vocaId).toEqual({ $nin: ['excluded'] });
+		expect(pipeline.findIndex((stage: Record<string, unknown>) => '$limit' in stage)).toBeGreaterThan(0);
+	});
+
 	it('orders due reviews first with random tie breaking', async () => {
 		const now = new Date('2026-09-10T00:00:00.000Z');
 		aggregateMock
@@ -116,7 +124,7 @@ describe('review.repository', () => {
 
 		const pipeline = aggregateMock.mock.calls[0]?.[0] as Array<Record<string, unknown>>;
 		expect(pipeline).toEqual([
-			{ $match: { userId: 'user-1' } },
+			{ $match: { userId: 'user-1', vocaId: { $nin: ['reported', 'blocked'] } } },
 			expect.objectContaining({
 				$group: expect.objectContaining({
 					_id: '$vocaId',

@@ -13,7 +13,11 @@ import { LONG_TERM_REVIEW_STAGE } from '$lib/shared/types/general.type';
 import { getWeeklyLevelDelta } from '$lib/shared/utils/level.util';
 
 export async function loadRanking(user: User) {
-	const [users, counts] = await Promise.all([findUsersForRanking(), countStudiedVocasByUser()]);
+	const [users, excluded] = await Promise.all([
+		findUsersForRanking(),
+		findPermanentlyExcludedVocaIds()
+	]);
+	const counts = await countStudiedVocasByUser(excluded);
 	const countByUser = new Map(counts.map(({ userId, count }) => [userId, count]));
 	let rank = 0;
 	return users.map((entry, index) => {

@@ -295,7 +295,9 @@ function getEnglishPronunciationIpa(currentVoca: Voca, example: QuizExample): st
 }
 
 async function refreshUserLevel(currentUser: User, now: Date): Promise<User> {
-	const levelReviews = await findRecentDistinctAnsweredReviews(currentUser._id, 500);
+	const reviewVocaIds = await findReviewVocaIdsByUser(currentUser._id);
+	const excluded = await findPermanentlyExcludedVocaIds(reviewVocaIds);
+	const levelReviews = await findRecentDistinctAnsweredReviews(currentUser._id, 500, excluded);
 	const levelVocaIds = levelReviews.map((currentReview) => currentReview.vocaId);
 	const levelVocas = levelVocaIds.length === 0 ? [] : await findVocaDifficultiesByIds(levelVocaIds);
 	const nextUser = rebuildUserLevel(currentUser, levelReviews, levelVocas, now);

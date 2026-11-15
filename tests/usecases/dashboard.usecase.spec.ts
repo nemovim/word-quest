@@ -15,6 +15,7 @@ describe('dashboard.usecase', () => {
 	});
 
 	it('returns shared ranks and only public ranking details', async () => {
+		vi.spyOn(VocaRepository, 'findPermanentlyExcludedVocaIds').mockResolvedValue([]);
 		vi.spyOn(ReviewRepository, 'countStudiedVocasByUser').mockResolvedValue([
 			{ userId: 'me', count: 12 },
 			{ userId: 'third', count: 30 }
