@@ -29,7 +29,8 @@ export function rebirthUpgradeTarget(rebirthCount: number): number {
 export function availableUpgradeLimit(currentLevel: number, rebirthCount: number): number {
 	return Math.min(vocabularyUpgradeLimit(currentLevel), rebirthUpgradeTarget(rebirthCount));
 }
-const chanceGain = { min: 2, max: 6, scale: 1 };
+const chanceGain = { min: 4, max: 12, scale: 1 };
+const maxHpGain = { min: 2, max: 6, scale: 1 };
 const attackGain = { min: 1, max: 4, scale: 1 };
 const incomeGain = { min: 1, max: 3, scale: 1 };
 const comboGain = { min: 5, max: 15, scale: 10 };
@@ -38,7 +39,7 @@ export const UPGRADE_GAINS = {
 	attack: attackGain,
 	income: incomeGain,
 	combo: comboGain,
-	maxHp: chanceGain,
+	maxHp: maxHpGain,
 	killRecovery: incomeGain,
 	defense: comboGain
 };
@@ -117,9 +118,6 @@ export function pickMonster(roll: number): MonsterKind {
 	];
 }
 
-export function baseUpgradeChance(vocabularyLevel: number): number {
-	return Math.min(
-		100,
-		Math.max(0, Math.floor((Number.isFinite(vocabularyLevel) ? vocabularyLevel : 1) * 10))
-	);
+export function baseUpgradeChance(_vocabularyLevel: number, rebirthCount = 0): number {
+	return Math.min(100, Math.max(0, Math.floor(rebirthCount)));
 }

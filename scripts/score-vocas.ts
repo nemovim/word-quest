@@ -61,11 +61,15 @@ function requireEnvironment(name: 'MONGO_URI'): string {
 async function loadBatch(
 	mode: ScoreMode,
 	afterId: mongoose.Types.ObjectId | undefined,
-	batchLimit: number
+	batchLimit: number,
+	resumeSince?: Date
 ): Promise<VocaForScoring[]> {
 	const collection = mongoose.connection.collection<VocaForScoring>('vocas');
 	const batchFilter = {
 		...scoreFilter(mode),
+		...(resumeSince
+			? { $or: [{ scoreEvaluatedAt: { $lt: resumeSince } }, { scoreEvaluatedAt: null }] }
+			: {}),
 		...(afterId ? { _id: { $gt: afterId } } : {})
 	};
 	return collection
@@ -275,12 +279,16 @@ async function processBatches({
 	mode,
 	onBatch,
 	reportPath,
-	limit
+	limit,
+	resumeSince,
+	alreadyProcessed
 }: {
 	mode: ScoreMode;
-	onBatch: (batchNumber: number, statistics: RunStatistics) => Promise<void>;
+	onBatch: (batchNumber: number, statistics: RunStatistics, processed: number) => Promise<void>;
 	reportPath: string;
 	limit?: number;
+	resumeSince?: Date;
+	alreadyProcessed: number;
 }): Promise<void> {
 	const statistics = createRunStatistics();
 	let deferredCount = 0;
@@ -288,7 +296,12 @@ async function processBatches({
 	let attempted = 0;
 
 	while (limit == null || attempted < limit) {
-		const vocas = await loadBatch(mode, afterId, nextBatchSize(limit, attempted, BATCH_SIZE));
+		const vocas = await loadBatch(
+			mode,
+			afterId,
+			nextBatchSize(limit, attempted, BATCH_SIZE),
+			resumeSince
+		);
 
 		if (vocas.length === 0) {
 			break;
@@ -320,7 +333,7 @@ async function processBatches({
 		statistics.batches += 1;
 		statistics.headwords += batchStatistics.headwords;
 		addScoresToStatistics(statistics, scores);
-		await onBatch(statistics.batches, batchStatistics);
+		await onBatch(statistics.batches, batchStatistics, alreadyProcessed + attempted);
 	}
 	console.log(`선택한 단어: ${attempted}개 (보류 ${deferredCount}개)`);
 }
@@ -380,22 +393,44 @@ async function loadStoredStatistics(): Promise<{
 
 async function main(): Promise<void> {
 	const runStartedAt = new Date();
-	const { mode, limit } = readScoringOptions(process.argv.slice(2));
+	const { mode, limit, resumeSince } = readScoringOptions(process.argv.slice(2));
 	const reportPath = await createReportFile(mode);
 
 	if (mode === 'all') {
-		await emitStatistics(reportPath, `[전체 재평가]\n실행 시작: ${runStartedAt.toISOString()}`);
+		await emitStatistics(
+			reportPath,
+			`[전체 재평가]\n실행 시작: ${runStartedAt.toISOString()}${resumeSince ? `\n이어하기 기준: ${resumeSince.toISOString()}` : '\n처음부터 전체 평가'}`
+		);
 	}
 
 	await mongoose.connect(requireEnvironment('MONGO_URI'));
 
 	try {
+		const collection = mongoose.connection.collection<VocaForScoring>('vocas');
+		const scope = scoreFilter(mode);
+		const [totalSenses, alreadyProcessed] = await Promise.all([
+			collection.countDocuments(scope),
+			resumeSince
+				? collection.countDocuments({ ...scope, scoreEvaluatedAt: { $gte: resumeSince } })
+				: Promise.resolve(0)
+		]);
+		const progress = (processed: number) =>
+			`처리 진행 (보류 포함): ${processed.toLocaleString()} / ${totalSenses.toLocaleString()} 뜻 (${totalSenses ? ((processed / totalSenses) * 100).toFixed(1) : '0.0'}%)`;
+		await emitStatistics(
+			reportPath,
+			`[진행 현황]\n이전에 처리된 뜻: ${alreadyProcessed.toLocaleString()}개\n남은 뜻: ${(totalSenses - alreadyProcessed).toLocaleString()}개\n완료 수 기준 다음 배치: 약 ${Math.floor(alreadyProcessed / BATCH_SIZE) + 1}번째 (배치당 ${BATCH_SIZE}개 환산)\n${progress(alreadyProcessed)}${limit == null ? '' : `\n이번 실행의 최대 처리 수: ${limit.toLocaleString()}개`}`
+		);
 		await processBatches({
 			mode,
 			limit,
+			resumeSince,
+			alreadyProcessed,
 			reportPath,
-			onBatch: async (batchNumber, statistics) =>
-				emitStatistics(reportPath, formatStatisticsSection(`배치 ${batchNumber}`, statistics))
+			onBatch: async (batchNumber, statistics, processed) =>
+				emitStatistics(
+					reportPath,
+					`${formatStatisticsSection(`이번 실행 배치 ${batchNumber}`, statistics)}\n${progress(processed)}`
+				)
 		});
 		const stored = await loadStoredStatistics();
 		const finalStatistics = {

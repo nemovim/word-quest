@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { STARTING_USER_LEVEL } from '$lib/shared/types/general.type';
 
 const userLevelHistorySchema = new mongoose.Schema(
 	{
@@ -13,7 +14,7 @@ const userSchema = new mongoose.Schema(
 		_id: { type: String, required: true },
 		email: { type: String, required: true },
 		name: { type: String, required: true },
-		currentLevel: { type: Number, required: true, default: 1 },
+		currentLevel: { type: Number, required: true, default: STARTING_USER_LEVEL },
 		levelHistory: {
 			type: [userLevelHistorySchema],
 			default: []

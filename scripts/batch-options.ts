@@ -40,12 +40,32 @@ export function nextBatchSize(
 }
 
 export function readScoringOptions(args: string[]) {
-	const { positional, options } = parseOptions(args, ['limit']);
+	const { positional, options } = parseOptions(args, ['limit', 'resume-since']);
 	const mode = positional[0];
-	if (positional.length !== 1 || (mode !== 'all' && mode !== 'missing' && mode !== 'zero'))
+	const positionalResume =
+		positional.length === 3 && positional[1] === 'resume' ? positional[2] : undefined;
+	if (
+		(positional.length !== 1 && !positionalResume) ||
+		(mode !== 'all' && mode !== 'missing' && mode !== 'zero') ||
+		(positionalResume && options['resume-since'])
+	)
 		throw new Error(
-			'Usage: npm run vocas:score -- <all|missing|zero> [--limit=N]'
+			'Usage: npm run vocas:score -- <all|missing|zero> [resume UTC_TIMESTAMP] [--limit=N]'
 		);
+	const resumeTime = positionalResume ?? options['resume-since'];
+	if (resumeTime) {
+		if (
+			mode !== 'all' ||
+			!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(resumeTime) ||
+			Number.isNaN(Date.parse(resumeTime))
+		)
+			throw new Error('--resume-since requires all mode and a UTC ISO timestamp.');
+		return {
+			mode: mode as ScoreMode,
+			limit: readLimit(options.limit),
+			resumeSince: new Date(resumeTime)
+		};
+	}
 	return { mode: mode as ScoreMode, limit: readLimit(options.limit) };
 }
 

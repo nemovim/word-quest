@@ -86,6 +86,7 @@ export const QUIZ_TEMPLATE_SLOT = '{{---}}' as const;
 
 export const EXAMPLE_SCORE_MAX = 5;
 export const MIN_LEVEL = 1;
+export const STARTING_USER_LEVEL = 2;
 export const MAX_LEVEL = 10;
 export const INVALID_UTILITY_SCORE = 0;
 export const MIN_UTILITY_SCORE = INVALID_UTILITY_SCORE;

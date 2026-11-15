@@ -173,7 +173,7 @@ async function actGameLocked(
 				message = `${label} +${(next - previous).toFixed(1)}%p → ${next.toFixed(1)}%`;
 			}
 			if (kind === 'attack' || kind === 'income' || kind === 'combo') state.weapon += 1;
-			state.successRate = baseUpgradeChance(user.currentLevel);
+			state.successRate = baseUpgradeChance(user.currentLevel, state.rebirthCount);
 			state.baseSuccessRate = state.successRate;
 			state.chanceUpgrades = 0;
 			message += ` · 기본 성공률 ${state.successRate}%로 초기화`;
@@ -230,7 +230,7 @@ async function actGameLocked(
 		state.comboCount = 0;
 		state.armor = { ...DEFAULT_ARMOR };
 		state.successfulUpgradeCount = 0;
-		state.successRate = baseUpgradeChance(user.currentLevel);
+		state.successRate = baseUpgradeChance(user.currentLevel, state.rebirthCount);
 		state.baseSuccessRate = state.successRate;
 		state.chanceUpgrades = 0;
 		state.upgradeFailures = 0;

@@ -24,6 +24,21 @@ describe('batch options', () => {
 		expect(scoreFilter('all')).toEqual({});
 	});
 
+	it('accepts a UTC resume time only for all mode', () => {
+		expect(readScoringOptions(['all', 'resume', '2026-11-14T15:56:30.023Z'])).toEqual({
+			mode: 'all',
+			limit: undefined,
+			resumeSince: new Date('2026-11-14T15:56:30.023Z')
+		});
+		expect(readScoringOptions(['all', '--resume-since=2026-11-14T15:56:30.023Z'])).toEqual({
+			mode: 'all',
+			limit: undefined,
+			resumeSince: new Date('2026-11-14T15:56:30.023Z')
+		});
+		expect(() => readScoringOptions(['missing', '--resume-since=2026-11-14T15:56:30Z'])).toThrow();
+		expect(() => readScoringOptions(['all', '--resume-since=invalid'])).toThrow();
+	});
+
 	it('requires an explicit example scope and accepts positional or legacy options', () => {
 		expect(() => readExampleOptions([])).toThrow();
 		expect(readExampleOptions(['missing', '--limit=10'])).toEqual({

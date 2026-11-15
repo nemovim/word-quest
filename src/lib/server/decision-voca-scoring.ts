@@ -44,52 +44,55 @@ export class UncertainVocaScoreError extends Error {
 	}
 }
 
-function threshold(name: string, fallback: number): number {
-	const raw = process.env[name]?.trim();
-	if (!raw) return fallback;
-	const value = Number(raw);
-	if (!Number.isFinite(value) || value < 0 || value > 1)
-		throw new Error(`${name} must be between 0 and 1.`);
-	return value;
-}
-
 async function requestDecision(input: VocaScoringInput, model: string) {
 	const key = process.env.OPENROUTER_API_KEY?.trim();
 	if (!key) throw new Error('OPENROUTER_API_KEY is required for vocabulary scoring.');
-	const response = await fetch('https://openrouter.ai/api/alpha/decisions', {
-		method: 'POST',
-		headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-		body: JSON.stringify({
-			model,
-			state: input,
-			questions: {
-				valid: {
-					type: 'noul',
-					instructions:
-						'In the supplied definitions, is there at least one ordinary context where sourceText and targetText naturally express the same complete intended sense as vocabulary equivalents? Accept a valid shared sense even if either expression has other senses, grammatical variations, or a more common alternative translation. Do not require every sense in a definition to match. Reject a different sense, wrong direction or negation, an unnatural expression, or omission of an essential modifier or other meaning required by the supplied sense. Judge the expressions themselves, not merely whether the definitions describe related topics.'
-				},
-				difficulty: {
-					type: 'score',
-					instructions:
-						'How difficult is the exact target expression and sense for a Korean learner to recall and use? Judge the target expression, not the obscurity of the source concept.',
-					criteria: difficultyLevels
-				},
-				koreanUsage: {
-					type: 'score',
-					instructions:
-						'How often do modern Korean speakers actively use the source expression in the exact supplied source sense? Do not rate other senses or mere recognizability.',
-					criteria: usageLevels
-				},
-				targetUsage: {
-					type: 'score',
-					instructions:
-						'How often do speakers actively use the target expression in the exact supplied target sense?',
-					criteria: usageLevels
+	const request = () =>
+		fetch('https://openrouter.ai/api/alpha/decisions', {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				model,
+				state: input,
+				questions: {
+					valid: {
+						type: 'noul',
+						instructions:
+							'For Korean speakers studying the target language, is the exact Korean source expression, in its supplied source sense, a natural and educationally useful cue for learning the exact target expression in its supplied target sense? Both expressions must share the complete intended sense in an ordinary, plausible usage. Reject if the target omits essential meaning or is unnatural, or if the Korean cue is an obscure, strained, indirect, figurative or unusual way to cue the target expression and a normal Korean learner would not naturally connect them. A shared dictionary definition alone does not make a good learning pair. Do not reject a specialized word solely because its topic is specialized when it is an accurate and natural cue for its exact meaning. Judge the expressions themselves, not just the similarity of definitions.'
+					},
+					difficulty: {
+						type: 'score',
+						instructions:
+							'How difficult is the exact target expression and sense for a Korean learner to recall and use? Judge the target expression, not the obscurity of the source concept.',
+						criteria: difficultyLevels
+					},
+					koreanUsage: {
+						type: 'score',
+						instructions:
+							'How often do modern Korean speakers actively use the source expression in the exact supplied source sense? Do not rate other senses or mere recognizability.',
+						criteria: usageLevels
+					},
+					targetUsage: {
+						type: 'score',
+						instructions:
+							'How often do speakers actively use the target expression in the exact supplied target sense?',
+						criteria: usageLevels
+					}
 				}
-			}
-		}),
-		signal: AbortSignal.timeout(30000)
-	});
+			}),
+			signal: AbortSignal.timeout(30000)
+		});
+	let response = await request();
+	for (let attempt = 0; response.status === 429 && attempt < 6; attempt++) {
+		const retryAfter = response.headers.get('retry-after');
+		const seconds = retryAfter == null ? NaN : Number(retryAfter);
+		const delay =
+			Number.isFinite(seconds) && seconds >= 0
+				? Math.min(seconds * 1000, 60000)
+				: Math.min(1000 * 2 ** attempt, 30000);
+		await new Promise((resolve) => setTimeout(resolve, delay + Math.random() * 500));
+		response = await request();
+	}
 	if (!response.ok) throw new Error(`Decision scoring request failed (${response.status}).`);
 	const data = (await response.json()) as {
 		model?: string;
@@ -139,7 +142,7 @@ async function requestDecision(input: VocaScoringInput, model: string) {
 	const difficulty = score('difficulty', 10, 2);
 	const korean = score('koreanUsage', 5, 1);
 	const target = score('targetUsage', 5, 1);
-	const isValid = valid.noul >= 0.5 ? 1 : 0;
+	const isValid = valid.noul >= 0.7 ? 1 : 0;
 	return {
 		score: {
 			difficultyLevel: difficulty.value,
@@ -173,17 +176,6 @@ async function requestDecision(input: VocaScoringInput, model: string) {
 
 export async function scoreVocaWithDecisionModel(input: VocaScoringInput) {
 	const primary = process.env.OPENROUTER_DECISION_MODEL?.trim() || 'perplexity/pplx-decider-v1.2';
-	const minConfidence = threshold('VOCA_SCORE_MIN_CONFIDENCE', 0.35);
-	const minValidity = threshold('VOCA_VALIDITY_MIN_CONFIDENCE', 0.8);
-	if (minValidity < 0.5) throw new Error('VOCA_VALIDITY_MIN_CONFIDENCE must be at least 0.5.');
 	const result = await requestDecision(input, primary);
-	const attempts = [result.evidence];
-	const probability = result.evidence.validProbability;
-	const validityCertain = Math.max(probability, 1 - probability) >= minValidity;
-	if (validityCertain && result.score.isValid === 0) return { ...result.score, attempts };
-	const scoresCertain = Object.values(result.evidence.confidence).every(
-		(confidence) => confidence >= minConfidence
-	);
-	if (validityCertain && scoresCertain) return { ...result.score, attempts };
-	throw new UncertainVocaScoreError(attempts);
+	return { ...result.score, attempts: [result.evidence] };
 }

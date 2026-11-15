@@ -192,6 +192,30 @@ describe('game progression', () => {
 		expect(stored.state.memoryShards).toBe(2);
 	});
 
+	it('refunds retired base upgrades once and raises the base on rebirth', async () => {
+		await loadGame(user);
+		Object.assign(stored.state, {
+			memoryShards: 1,
+			baseSuccessUpgrades: 2,
+			baseSuccessRate: 12,
+			successRate: 17
+		});
+		const view = await loadGame(user);
+		expect(view).toMatchObject({ memoryShards: 4, baseSuccessRate: 0, successRate: 5 });
+		await action('memory-upgrade', 'word', 'attack', 'iron');
+		expect(stored.state).toMatchObject({ memoryShards: 3, baseSuccessUpgrades: 0 });
+		expect((await loadGame(user)).memoryShards).toBe(3);
+		Object.assign(stored.state, {
+			successfulUpgradeCount: 10,
+			gold: 5000,
+			iron: 300,
+			silver: 100,
+			stones: 10
+		});
+		await action('rebirth');
+		expect(stored.state).toMatchObject({ rebirthCount: 1, baseSuccessRate: 1, successRate: 1 });
+	});
+
 	it('limits successful upgrades and resets the run while preserving permanent progress', async () => {
 		await loadGame(user);
 		await rewardStudy(user, 'initialize-rebirth');
@@ -236,7 +260,7 @@ describe('game progression', () => {
 		expect(stored.lockUntil).toBe(0);
 	});
 
-	it('applies resource yields to chest contents only', async () => {
+	it('applies resource yields to chest contents without boosting hit gold', async () => {
 		await rewardStudy(user, 'initialize-yields');
 		Object.assign(stored.state, {
 			resourceYield: { gold: 10, iron: 100, silver: 100, stones: 100 },
@@ -249,6 +273,26 @@ describe('game progression', () => {
 
 		const chest = await openChest(user, 'yield-chest');
 		expect(chest.reward).toMatchObject({ gold: 71, iron: 26, silver: 6, stones: 2 });
+	});
+
+	it('boosts each monster kill reward but keeps hit gold unchanged', async () => {
+		await loadGame(user);
+		stored.state.resourceYield = { gold: 100, iron: 100, silver: 100, stones: 100 };
+		stored.state.battle.kind = 'slime';
+		stored.state.battle.hp = 100;
+		expect((await rewardStudy(user, 'plain-hit')).reward.gold).toBe(1);
+		stored.state.battle.hp = 1;
+		expect((await rewardStudy(user, 'slime-boost')).reward.gold).toBe(41);
+		stored.state.battle.kind = 'mushroom';
+		stored.state.battle.hp = 1;
+		expect((await rewardStudy(user, 'mushroom-boost')).reward.iron).toBe(12);
+		stored.state.battle.kind = 'bat';
+		stored.state.battle.hp = 1;
+		expect((await rewardStudy(user, 'bat-boost')).reward.silver).toBe(6);
+		stored.state.battle.kind = 'golem';
+		stored.state.battle.hp = 1;
+		roll.mockReturnValueOnce(0).mockReturnValueOnce(99);
+		expect((await rewardStudy(user, 'golem-boost')).reward.stones).toBe(2);
 	});
 
 	it('reuses the checked combat state and saves only changed fields', async () => {
@@ -282,7 +326,7 @@ describe('game progression', () => {
 	});
 	it('uses only the selected resource and rejects missing materials', async () => {
 		expect(UPGRADE_GAINS.attack).toEqual({ min: 1, max: 4, scale: 1 });
-		expect(UPGRADE_GAINS.chance).toEqual({ min: 2, max: 6, scale: 1 });
+		expect(UPGRADE_GAINS.chance).toEqual({ min: 4, max: 12, scale: 1 });
 		expect(UPGRADE_GAINS.maxHp).toEqual({ min: 2, max: 6, scale: 1 });
 		await loadGame(user);
 		Object.assign(stored.state, { gold: 200, iron: 20, stones: 0, successRate: 70 });
@@ -358,30 +402,30 @@ describe('random rewards and upgrade protection', () => {
 			comboRate: 0
 		});
 	});
-	it('uses the word-level base, retains charges on failure and resets after either successful upgrade', async () => {
+	it('uses the fixed base, retains charges on failure and resets after either successful upgrade', async () => {
 		await loadGame(user);
 		Object.assign(stored.state, { gold: 10000, iron: 20, stones: 3 });
-		expect(stored.state.successRate).toBe(10);
+		expect(stored.state.successRate).toBe(0);
 		const calls = roll.mock.calls.length;
 		roll.mockReturnValueOnce(3);
 		await action('upgrade', 'word', 'chance');
 		expect(roll.mock.calls.length).toBe(calls + 1);
-		expect(roll).toHaveBeenLastCalledWith(5);
-		expect(stored.state).toMatchObject({ gold: 9990, iron: 20, stones: 3, successRate: 15 });
-		roll.mockReturnValueOnce(15);
+		expect(roll).toHaveBeenLastCalledWith(9);
+		expect(stored.state).toMatchObject({ gold: 10000, iron: 20, stones: 3, successRate: 7 });
+		roll.mockReturnValueOnce(7);
 		await action('upgrade');
-		expect(stored.state).toMatchObject({ iron: 17, successRate: 15, attack: 10 });
-		roll.mockReturnValueOnce(14).mockReturnValueOnce(0);
+		expect(stored.state).toMatchObject({ iron: 17, successRate: 7, attack: 10 });
+		roll.mockReturnValueOnce(6).mockReturnValueOnce(0);
 		await action('upgrade');
-		expect(stored.state).toMatchObject({ iron: 14, successRate: 10, attack: 11, weapon: 1 });
+		expect(stored.state).toMatchObject({ iron: 14, successRate: 0, attack: 11, weapon: 1 });
 		roll.mockReturnValueOnce(3);
 		await action('upgrade', 'word', 'chance');
-		expect(stored.state).toMatchObject({ gold: 9978, successRate: 15 });
+		expect(stored.state).toMatchObject({ gold: 9998, successRate: 7 });
 		roll.mockReturnValueOnce(0).mockReturnValueOnce(0);
 		await action('upgrade', 'word', 'combo');
 		expect(stored.state).toMatchObject({
 			stones: 2,
-			successRate: 10,
+			successRate: 0,
 			comboRate: 0.5,
 			comboUpgrades: 1,
 			weapon: 2
@@ -393,19 +437,19 @@ describe('random rewards and upgrade protection', () => {
 		await expect(action('upgrade', 'word', 'chance')).rejects.toMatchObject({ status: 400 });
 		expect(stored.state.gold).toBe(gold);
 	});
-	it('rounds vocabulary level down and preserves only charged points when the level changes', async () => {
-		expect(baseUpgradeChance(2.34)).toBe(23);
-		expect(baseUpgradeChance(2.3)).toBe(23);
-		expect(baseUpgradeChance(10)).toBe(100);
+	it('keeps the base at 0 and preserves charged points when the level changes', async () => {
+		expect(baseUpgradeChance(2.34)).toBe(0);
+		expect(baseUpgradeChance(2.3)).toBe(0);
+		expect(baseUpgradeChance(10)).toBe(0);
 		const advanced = { ...user, currentLevel: 2.34 };
 		await beginExploration(advanced);
-		expect((await loadGame(advanced)).successRate).toBe(23);
-		stored.state.successRate = 33;
+		expect((await loadGame(advanced)).successRate).toBe(0);
+		stored.state.successRate = 20;
 		const higher = { ...user, currentLevel: 3.01 };
-		expect(await loadGame(higher)).toMatchObject({ baseSuccessRate: 30, successRate: 40 });
-		expect(await loadGame(higher)).toMatchObject({ baseSuccessRate: 30, successRate: 40 });
+		expect(await loadGame(higher)).toMatchObject({ baseSuccessRate: 0, successRate: 20 });
+		expect(await loadGame(higher)).toMatchObject({ baseSuccessRate: 0, successRate: 20 });
 		expect(await loadGame({ ...user, currentLevel: 1.01 })).toMatchObject({
-			baseSuccessRate: 10,
+			baseSuccessRate: 0,
 			successRate: 20
 		});
 		Object.assign(stored.state, { iron: 10 });
@@ -415,16 +459,16 @@ describe('random rewards and upgrade protection', () => {
 		form.set('revision', String(stored.state.revision));
 		roll.mockReturnValueOnce(0).mockReturnValueOnce(0);
 		await actGame(higher, form);
-		expect(stored.state).toMatchObject({ baseSuccessRate: 30, successRate: 30 });
+		expect(stored.state).toMatchObject({ baseSuccessRate: 0, successRate: 0 });
 	});
-	it.each([0, 1, 2, 3, 4])(
-		'charges by a random 2–6 points without increasing equipment upgrades for roll %i',
+	it.each([0, 1, 2, 3, 4, 5, 6, 7, 8])(
+		'charges by a random 4–12 points without increasing equipment upgrades for roll %i',
 		async (value) => {
 			await loadGame(user);
 			stored.state.gold = 10000;
 			roll.mockReturnValueOnce(value);
 			await action('upgrade', 'word', 'chance');
-			expect(stored.state.successRate).toBe(12 + value);
+			expect(stored.state.successRate).toBe(4 + value);
 			expect(stored.state).toMatchObject({
 				weapon: 0,
 				attackUpgrades: 0,
@@ -458,7 +502,7 @@ describe('random rewards and upgrade protection', () => {
 		expect(await loadGame(user)).toMatchObject({
 			attack: 29,
 			comboRate: 0,
-			successRate: 10,
+			successRate: 0,
 			attackUpgrades: 4,
 			comboUpgrades: 0,
 			chanceUpgrades: 0
@@ -971,13 +1015,13 @@ describe('silver and hit income upgrades', () => {
 			...before,
 			silver: 9,
 			hitGold: 2,
-			successRate: 10,
+			successRate: 0,
 			incomeUpgrades: 1
 		});
 		stored.state.successRate = 100;
 		roll.mockReturnValueOnce(99).mockReturnValueOnce(2);
 		await action('upgrade', 'word', 'income');
-		expect(stored.state).toMatchObject({ hitGold: 5, silver: 6, successRate: 10 });
+		expect(stored.state).toMatchObject({ hitGold: 5, silver: 6, successRate: 0 });
 		expect((await rewardStudy(user, 'second')).reward.gold).toBe(5);
 		expect((await rewardStudy(user, 'second')).reward.gold).toBe(0);
 		expect((await loadGame(user)).hitGold).toBe(5);

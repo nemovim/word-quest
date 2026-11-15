@@ -88,10 +88,10 @@
 		finishWait?.();
 	});
 	let outcome = $state<{ success: boolean; gain: string } | null>(null);
-	const base = $derived(currentGame.baseSuccessRate ?? 10);
+	const base = $derived(currentGame.baseSuccessRate ?? 0);
 	const rate = $derived(currentGame.successRate ?? base);
 	const levels = $derived({
-		chance: currentGame.successRate ?? currentGame.baseSuccessRate ?? 10,
+		chance: currentGame.successRate ?? currentGame.baseSuccessRate ?? 0,
 		attack: currentGame.attackUpgrades ?? currentGame.weapon,
 		income: currentGame.incomeUpgrades ?? 0,
 		combo: currentGame.comboUpgrades ?? 0,
@@ -150,7 +150,7 @@
 		};
 	};
 	const values = $derived({
-		chance: currentGame.successRate ?? currentGame.baseSuccessRate ?? 10,
+		chance: currentGame.successRate ?? currentGame.baseSuccessRate ?? 0,
 		attack: currentGame.attack,
 		income: currentGame.hitGold ?? 1,
 		combo: currentGame.comboRate,
@@ -387,10 +387,7 @@
 			</div>
 			<strong>✨ {currentGame.memoryShards.toLocaleString()}</strong>
 		</div>
-		<p class="section-note">
-			원하는 자원을 골라 보물상자에서 해당 자원의 획득량을 강화해요. 강화는 100% 성공하고 한 번에
-			0.5~1.5%p 올라요.
-		</p>
+		<p class="section-note">몬스터 처치와 보물상자 자원 획득량이 강화할 때마다 0.5~1.5%p씩 영구적으로 올라요.</p>
 		<div class="memory-options">
 			{#each RESOURCE_YIELD_KINDS as resource (resource)}
 				<form method="POST" use:enhance={enhanceMeta}>
@@ -423,8 +420,9 @@
 			<strong>강화 {currentGame.successfulUpgradeCount} / {rebirthTarget}</strong>
 		</div>
 		<p class="section-note">
-			환생하면 자원·장비 강화·상자·탐험 진행을 초기화하고, 기본 능력치와 획득량 강화는 유지해요.
-			이번 환생 보상으로 기억의 파편 <b>{currentGame.rebirthCount + 1}</b>개를 얻어요.
+			환생하면 자원·장비 강화·상자·탐험 진행을 초기화하고, 기본 능력치와 영구 강화는 유지해요.
+			기본 성공률은 환생할 때마다 1%p 올라요. 이번
+			환생 보상으로 기억의 파편 <b>{currentGame.rebirthCount + 1}</b>개를 얻어요.
 		</p>
 		<div class="rebirth-cost" aria-label="환생 비용">
 			<span>🪙 {nextRebirthCost.gold.toLocaleString()}</span>
@@ -475,10 +473,10 @@
 	<details>
 		<summary>강화 안내</summary>
 		<p>
-			기본 성공률은 단어 레벨 ×10을 버림한 {base}%예요. 골드로 +2~6%p씩 충전한 성공률은 무기와
-			방어구가 함께 써요. 연계율은 2연속 정답부터 연속 횟수 × 연계율만큼 추가 피해를 주고(보너스
-			최소 1), 오답이나 넘기기로 연계가 끊겨요. 연계율은 최대 {COMBO_RATE_CAP}%이고 추가 피해는
-			공격력의 최대 {COMBAT_PERCENT_CAP}%예요. 방어력은 오답과 패스 피해를 줄여요.
+			기본 성공률은 {base}%예요. 골드로 +4~12%p씩 충전한 성공률은 무기와 방어구가 함께 써요.
+			연계율은 2연속 정답부터 연속 횟수 × 연계율만큼 추가 피해를 주고(보너스 최소 1), 오답이나
+			넘기기로 연계가 끊겨요. 연계율은 최대 {COMBO_RATE_CAP}%이고 추가 피해는 공격력의 최대 {COMBAT_PERCENT_CAP}%예요.
+			방어력은 오답과 패스 피해를 줄여요.
 		</p>
 		<p>
 			재료는 시도할 때 소모돼요. 실패해도 능력치는 유지되며 성공률은 변하지 않아요. 강화에 성공하면

@@ -157,22 +157,22 @@ export async function rewardStudy(
 					switch (battle.kind ?? 'slime') {
 						case 'slime':
 							{
-								const bonusGold = (5 + randomInt(6)) * 2;
+								const bonusGold = applyResourceYield(state, 'gold', (5 + randomInt(6)) * 2);
 								reward.gold += bonusGold;
 								state.gold += bonusGold;
 							}
 							break;
 						case 'mushroom':
-							reward.iron = 3 + randomInt(4);
+							reward.iron = applyResourceYield(state, 'iron', 3 + randomInt(4));
 							state.iron += reward.iron;
 							break;
 						case 'bat':
-							reward.silver = 1 + randomInt(3);
+							reward.silver = applyResourceYield(state, 'silver', 1 + randomInt(3));
 							state.silver += reward.silver;
 							break;
 						case 'golem':
 							if (randomInt(100) < GOLEM_STONE_DROP_CHANCE) {
-								reward.stones = 1;
+								reward.stones = applyResourceYield(state, 'stones', 1);
 								state.stones += reward.stones;
 							}
 							break;

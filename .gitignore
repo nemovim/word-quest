@@ -32,3 +32,5 @@ vite.config.ts.timestamp-*
 # Legacy script output locations
 /score-reports/
 /example-generation-*.txt
+
+/tmp/

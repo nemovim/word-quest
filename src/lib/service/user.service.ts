@@ -12,7 +12,8 @@ import {
 	LEVEL_HISTORY_INTERVAL_MS,
 	MAX_LEVEL,
 	MAX_REVIEW_STAGE,
-	MIN_LEVEL
+	MIN_LEVEL,
+	STARTING_USER_LEVEL
 } from '$lib/shared/types/general.type';
 import { clampNumber, roundTo2 } from '$lib/shared/utils/general.util';
 
@@ -109,7 +110,7 @@ export function calculateVocabularyLevel(reviews: LevelReview[], vocas: VocaDiff
 	});
 
 	if (samples.length === 0) {
-		return MIN_LEVEL;
+		return STARTING_USER_LEVEL;
 	}
 
 	const getLossDerivative = (level: number) =>
@@ -118,7 +119,7 @@ export function calculateVocabularyLevel(reviews: LevelReview[], vocas: VocaDiff
 				total +
 				(getExpectedMastery(level, sample.difficultyLevel) - sample.mastery) /
 					LEVEL_PROBABILITY_SCALE,
-			LEVEL_PRIOR_WEIGHT * (level - MIN_LEVEL)
+			LEVEL_PRIOR_WEIGHT * (level - STARTING_USER_LEVEL)
 		);
 
 	if (getLossDerivative(MIN_VOCABULARY_LEVEL) >= 0) {
@@ -155,8 +156,8 @@ export async function getOrCreateUser(userId: string, email: string, name: strin
 	return createUser(userId, {
 		email,
 		name,
-		currentLevel: MIN_LEVEL,
-		levelHistory: [{ level: MIN_LEVEL, recordedAt: new Date().toISOString() }]
+		currentLevel: STARTING_USER_LEVEL,
+		levelHistory: [{ level: STARTING_USER_LEVEL, recordedAt: new Date().toISOString() }]
 	});
 }
 

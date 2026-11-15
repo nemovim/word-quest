@@ -9,10 +9,10 @@ import {
 } from '$lib/service/user.service';
 
 describe('user.service', () => {
-	it('keeps level 1 when there are no answered vocas', () => {
+	it('uses the starting level when there are no answered vocas', () => {
 		const reviews = [makeReview({ correctCount: 0, wrongCount: 0 })];
 
-		expect(calculateVocabularyLevel(reviews, [makeVoca()])).toBe(1);
+		expect(calculateVocabularyLevel(reviews, [makeVoca()])).toBe(2);
 	});
 
 	it('allows poor results to lower the vocabulary level below 1, down to 0', () => {
@@ -49,7 +49,7 @@ describe('user.service', () => {
 				vocas
 			)
 		);
-		expect(levels[4]).toBe(1);
+		expect(levels[4]).toBeCloseTo(1.86, 2);
 		for (let stage = 1; stage < levels.length; stage += 1)
 			expect(levels[stage]).toBeGreaterThan(levels[stage - 1]);
 		expect(

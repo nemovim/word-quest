@@ -36,6 +36,7 @@ export type GameState = {
 	comboCount: number;
 	rebirthCount: number;
 	memoryShards: number;
+	baseSuccessUpgrades: number;
 	resourceYield: Record<ResourceYieldKind, number>;
 	resourceYieldUpgrades: Record<ResourceYieldKind, number>;
 	successfulUpgradeCount: number;
@@ -107,6 +108,7 @@ export const createInitialGameState = (): GameState => ({
 	comboCount: 0,
 	rebirthCount: 0,
 	memoryShards: 0,
+	baseSuccessUpgrades: 0,
 	resourceYield: { ...DEFAULT_RESOURCE_YIELD },
 	resourceYieldUpgrades: { ...DEFAULT_RESOURCE_YIELD },
 	successfulUpgradeCount: 0,
@@ -226,6 +228,7 @@ export async function readGameState(user: User): Promise<GameSnapshot | null> {
 			nonnegativeInteger(state.armor?.maxHpUpgrades) +
 			nonnegativeInteger(state.armor?.killRecoveryUpgrades) +
 			nonnegativeInteger(state.armor?.defenseUpgrades);
+	const removedBaseUpgrades = Math.min(90, nonnegativeInteger(state.baseSuccessUpgrades));
 	const normalizedState = {
 		...state,
 		silver: state.silver ?? 0,
@@ -239,7 +242,10 @@ export async function readGameState(user: User): Promise<GameSnapshot | null> {
 		comboRate: Math.min(COMBO_RATE_CAP, state.comboRate ?? 0),
 		comboCount: Math.max(0, Math.min(1000, Math.floor(state.comboCount ?? 0))),
 		rebirthCount: nonnegativeInteger(state.rebirthCount),
-		memoryShards: nonnegativeInteger(state.memoryShards),
+		memoryShards:
+			nonnegativeInteger(state.memoryShards) +
+			(removedBaseUpgrades * (removedBaseUpgrades + 1)) / 2,
+		baseSuccessUpgrades: 0,
 		resourceYield: normalizeResourceRecord(state.resourceYield),
 		resourceYieldUpgrades: normalizeResourceRecord(state.resourceYieldUpgrades, true),
 		successfulUpgradeCount,
@@ -252,7 +258,7 @@ export async function readGameState(user: User): Promise<GameSnapshot | null> {
 }
 
 export function withUpgradeRate(state: GameState, user: User): GameState {
-	const base = baseUpgradeChance(user.currentLevel);
+	const base = baseUpgradeChance(user.currentLevel, state.rebirthCount);
 	return {
 		...state,
 		baseSuccessRate: base,
