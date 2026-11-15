@@ -4,8 +4,8 @@ import { OpenRouter } from '@openrouter/sdk';
 import mongoose from 'mongoose';
 
 import { examplePipeline, nextBatchSize, readExampleOptions } from './batch-options.ts';
-import { saveGeneratedExamples } from './example-storage.ts';
 import { readCheckpoint, saveCheckpoint, type ExampleCheckpoint } from './example-checkpoint.ts';
+import { saveGeneratedExamples } from './example-storage.ts';
 import { createLogFile } from './log-file.ts';
 import { queueDeferredExample } from '../src/lib/server/deferred-example.ts';
 import {
