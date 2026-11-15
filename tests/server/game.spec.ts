@@ -580,6 +580,7 @@ describe('persistent monster and treasure chests', () => {
 	});
 	it('adds combo damage from the second consecutive correct answer and never rerolls duplicates', async () => {
 		await beginExploration(user);
+		Object.assign(stored.state.battle, { hp: 100, maxHp: 100 });
 		stored.state.comboRate = 10;
 		expect((await rewardStudy(user, 'first')).reward).toMatchObject({ damage: 10, combo: 0 });
 		expect((await rewardStudy(user, 'second')).reward).toMatchObject({
@@ -637,7 +638,10 @@ describe('persistent monster and treasure chests', () => {
 		await rewardStudy(user, 'init');
 		Object.assign(stored.state, { comboRate: 15, comboCount: 9 });
 		Object.assign(stored.state.battle, { maxHp: 1000, hp: 1000 });
-		expect((await rewardStudy(user, 'bonus-cap')).reward).toMatchObject({ damage: 25, comboBonus: 15 });
+		expect((await rewardStudy(user, 'bonus-cap')).reward).toMatchObject({
+			damage: 25,
+			comboBonus: 15
+		});
 		Object.assign(stored.state.battle, { boss: true, maxHp: 160, hp: 7, kills: 5 });
 		stored.state.comboCount = 1;
 		const result = await rewardStudy(user, 'boss-combo');
@@ -648,14 +652,14 @@ describe('persistent monster and treasure chests', () => {
 	it('resets combo on pass and retains health across answers', async () => {
 		const start = await beginExploration(user);
 		stored.state.comboRate = 10;
-		expect((await rewardStudy(user, 'a')).battle.hp).toBe(40);
-		expect((await rewardStudy(user, 'b')).battle.hp).toBe(28);
+		expect((await rewardStudy(user, 'a')).battle.hp).toBe(22);
+		expect((await rewardStudy(user, 'b')).battle.hp).toBe(10);
 		expect(stored.state.comboCount).toBe(2);
 		expect((await handlePass(user, 'c')).reward.healing).toBe(9);
 		expect(stored.state.comboCount).toBe(0);
-		expect((await handlePass(user, 'c')).battle.hp).toBe(37);
-		expect((await handlePass(user, 'd', 10)).battle.hp).toBe(50);
-		expect((await loadGame(user)).battle.hp).toBe(50);
+		expect((await handlePass(user, 'c')).battle.hp).toBe(19);
+		expect((await handlePass(user, 'd', 10)).battle.hp).toBe(32);
+		expect((await loadGame(user)).battle.hp).toBe(32);
 		await rewardStudy(user, 'after-pass-a');
 		await rewardStudy(user, 'after-pass-b');
 		expect(stored.state.comboCount).toBe(2);
@@ -663,19 +667,20 @@ describe('persistent monster and treasure chests', () => {
 		expect(stored.state.comboCount).toBe(0);
 		stored.state.weapon = 10;
 		stored.state.attack = 40;
-		expect((await rewardStudy(user, 'e')).battle.hp).toBe(50);
+		expect((await rewardStudy(user, 'e')).battle.hp).toBe(32);
 		expect((await rewardStudy(user, 'e')).reward.gold).toBe(0);
 	});
 	it('stores a chest on death, pays only on open and replays without reroll', async () => {
 		await loadGame(user);
 		stored.state.battle.kind = 'slime';
+		Object.assign(stored.state.battle, { hp: 40, maxHp: 40 });
 		for (let i = 0; i < 12; i++) {
-			if (i === 4) roll.mockReturnValueOnce(5).mockReturnValueOnce(0).mockReturnValueOnce(99);
+			if (i === 3) roll.mockReturnValueOnce(5).mockReturnValueOnce(0).mockReturnValueOnce(99);
 			await rewardStudy(user, String(i));
 		}
 		expect(stored.state.gold).toBe(52);
 		const view = await loadGame(user);
-		expect(view.battle).toMatchObject({ hp: 30, kills: 2 });
+		expect(view.battle).toMatchObject({ hp: 32, kills: 3 });
 		expect(view.battle.chests).toHaveLength(1);
 		expect(view.battle).not.toHaveProperty('opened');
 		roll.mockImplementation((max) => (max === 100 ? 0 : max - 1));
@@ -694,13 +699,13 @@ describe('persistent monster and treasure chests', () => {
 		await beginExploration(user);
 		stored.state.attack = 1000;
 		for (let i = 0; i < 5; i++) await rewardStudy(user, `kill-${i}`);
-		expect(stored.state.battle).toMatchObject({ boss: false, hp: 50 });
+		expect(stored.state.battle).toMatchObject({ boss: false, hp: 32 });
 		stored.state.battle.kind = 'slime';
 		roll.mockReturnValueOnce(5).mockReturnValueOnce(99).mockReturnValueOnce(4);
 		const encounter = await rewardStudy(user, 'rare');
-		expect(encounter.battle).toMatchObject({ boss: true, kind: 'guardian', hp: 200 });
+		expect(encounter.battle).toMatchObject({ boss: true, kind: 'guardian', hp: 128 });
 		const slain = await rewardStudy(user, 'boss');
-		expect(slain.reward).toMatchObject({ damage: 200, clear: 'boss' });
+		expect(slain.reward).toMatchObject({ damage: 128, clear: 'boss' });
 		expect(slain.battle.chests.at(-1)?.boss).toBe(true);
 	});
 	it('has exactly ten boss rolls and all four regular species', () => {
@@ -712,7 +717,7 @@ describe('persistent monster and treasure chests', () => {
 	});
 	it('persists the first random encounter across reloads and doubles boss retaliation', async () => {
 		roll.mockReturnValueOnce(0);
-		expect((await loadGame(user)).battle).toMatchObject({ boss: true, kind: 'guardian', hp: 200 });
+		expect((await loadGame(user)).battle).toMatchObject({ boss: true, kind: 'guardian', hp: 128 });
 		const calls = roll.mock.calls.length;
 		expect((await loadGame(user)).battle.kind).toBe('guardian');
 		expect(roll.mock.calls.length).toBe(calls);
@@ -723,9 +728,9 @@ describe('persistent monster and treasure chests', () => {
 		await beginExploration(user);
 		stored.state.combatVersion = 3;
 		Object.assign(stored.state.battle, { boss: true, hp: 60, maxHp: 240 });
-		expect((await loadGame(user)).battle).toMatchObject({ hp: 50, maxHp: 200 });
+		expect((await loadGame(user)).battle).toMatchObject({ hp: 32, maxHp: 128 });
 		await beginExploration(user);
-		expect((await loadGame(user)).battle).toMatchObject({ hp: 50, maxHp: 200 });
+		expect((await loadGame(user)).battle).toMatchObject({ hp: 32, maxHp: 128 });
 	});
 	it('serializes concurrent hits and chest opens without duplicate payout', async () => {
 		await rewardStudy(user, 'a');
@@ -854,25 +859,27 @@ describe('armor upgrades', () => {
 describe('vocabulary-scaled monsters', () => {
 	it('keeps early HP accessible and increases the gains at high levels', () => {
 		for (const [level, hp] of [
-			[10, 50],
-			[20, 100],
-			[50, 469],
-			[80, 1037],
-			[100, 1500]
+			[10, 32],
+			[20, 64],
+			[50, 300],
+			[80, 663],
+			[100, 960]
 		]) {
 			expect(monsterStats(level).maxHp).toBe(hp);
 			expect(monsterStats(level, true).maxHp).toBe(hp * 4);
 		}
 	});
 	it.each([
-		[4, 100, 282, 750, 1500],
-		[5, 100, 400, 750, 1500],
-		[6, 100, 595, 749, 1500],
-		[7, 20, 120, 50, 100],
-		[8, 100, 1000, 750, 1500],
-		[9, 80, 1643, 519, 1037],
-		[10, 20, 200, 50, 100],
-		[11, 20, 140, 50, 100]
+		[4, 100, 282, 480, 960],
+		[5, 100, 400, 480, 960],
+		[6, 100, 595, 480, 960],
+		[7, 20, 120, 32, 64],
+		[8, 100, 1000, 480, 960],
+		[9, 80, 1643, 332, 663],
+		[10, 20, 200, 32, 64],
+		[11, 20, 140, 32, 64],
+		[12, 20, 100, 32, 64],
+		[13, 20, 80, 32, 64]
 	])(
 		'updates version %i HP once while retaining the remaining health ratio',
 		async (version, level, maxHp, expectedHp, expectedMaxHp) => {
@@ -888,27 +895,27 @@ describe('vocabulary-scaled monsters', () => {
 		expect(monsterLevel(1)).toBe(10);
 		expect(monsterLevel(1.01)).toBe(10);
 		expect(monsterLevel(5.99)).toBe(59);
-		expect(monsterStats(10)).toMatchObject({ level: 10, maxHp: 50, rewardMultiplier: 1 });
-		expect(monsterStats(11).maxHp).toBe(52);
-		expect(monsterStats(20).maxHp).toBe(100);
+		expect(monsterStats(10)).toMatchObject({ level: 10, maxHp: 32, rewardMultiplier: 1 });
+		expect(monsterStats(11).maxHp).toBe(33);
+		expect(monsterStats(20).maxHp).toBe(64);
 		expect(monsterStats(100, true)).toMatchObject({
 			level: 100,
-			maxHp: 6000,
+			maxHp: 3840,
 			rewardMultiplier: 3.7
 		});
 		expect(monsterStats(NaN).level).toBe(10);
 	});
 	it('locks the monster tier until death and carries it into the chest', async () => {
 		const advanced = { ...user, currentLevel: 5.7 };
-		expect((await loadGame(advanced)).battle).toMatchObject({ level: 57, hp: 586 });
+		expect((await loadGame(advanced)).battle).toMatchObject({ level: 57, hp: 375 });
 		const hit = await rewardStudy(advanced, 'a');
 		expect(hit.reward.gold).toBe(1);
-		expect(hit.battle.hp).toBe(576);
-		expect((await loadGame({ ...user, currentLevel: 9 })).battle.hp).toBe(576);
+		expect(hit.battle.hp).toBe(365);
+		expect((await loadGame({ ...user, currentLevel: 9 })).battle.hp).toBe(365);
 		stored.state.attack = 1200;
 		roll.mockReturnValueOnce(99).mockReturnValueOnce(0);
 		const kill = await rewardStudy({ ...user, currentLevel: 9 }, 'b');
-		expect(kill.battle).toMatchObject({ level: 90, hp: 1261 });
+		expect(kill.battle).toMatchObject({ level: 90, hp: 807 });
 		const chest = kill.battle.chests[0];
 		expect(chest.level).toBe(57);
 		roll.mockImplementation((max) => (max === 100 ? 19 : 0));
@@ -923,7 +930,7 @@ describe('vocabulary-scaled monsters', () => {
 		stored.state.battle.chests = [{ id: 'legacy', boss: false }];
 		expect((await loadGame({ ...user, currentLevel: 8 })).battle).toMatchObject({
 			level: 10,
-			hp: 40
+			hp: 22
 		});
 		roll.mockImplementation((max) => max - 1);
 		expect((await openChest({ ...user, currentLevel: 8 }, 'legacy')).reward).toMatchObject({
@@ -1022,7 +1029,7 @@ describe('continuous exploration health', () => {
 			const start = await beginExploration(user);
 			const id = start.player!.id;
 			stored.state.battle.boss = boss;
-			stored.state.battle.hp = 40;
+			stored.state.battle.hp = 20;
 			const first = await handlePass(user, `${id}:pass`, 2.4, id);
 			expect(first.reward).toMatchObject({
 				healing: 7,
@@ -1043,7 +1050,7 @@ describe('continuous exploration health', () => {
 		await rewardStudy(user, 'a');
 		await rewardStudy(user, 'b');
 		expect((await handlePass(user, 'skip', 1.1)).reward.healing).toBe(3);
-		expect((await handlePass(user, 'skip2', 10)).battle.hp).toBe(50);
+		expect((await handlePass(user, 'skip2', 10)).battle.hp).toBe(32);
 	});
 	it('migrates fractional snapshots and buffs HP once while keeping wound ratio and chest tier', async () => {
 		await rewardStudy(user, 'a');
@@ -1052,9 +1059,9 @@ describe('continuous exploration health', () => {
 		stored.state.battle.hp = 40;
 		stored.state.battle.maxHp = 80;
 		stored.state.battle.chests = [{ id: 'old', level: 2.34, boss: false }];
-		expect((await loadGame(user)).battle).toMatchObject({ level: 23, hp: 63, maxHp: 125 });
+		expect((await loadGame(user)).battle).toMatchObject({ level: 23, hp: 40, maxHp: 80 });
 		await beginExploration(user);
-		expect((await loadGame(user)).battle).toMatchObject({ level: 23, hp: 63, maxHp: 125 });
+		expect((await loadGame(user)).battle).toMatchObject({ level: 23, hp: 40, maxHp: 80 });
 		expect(stored.state.battle.chests[0].level).toBe(23);
 	});
 });

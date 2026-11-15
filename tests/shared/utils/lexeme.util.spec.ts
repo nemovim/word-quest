@@ -9,6 +9,10 @@ describe('lexeme.util', () => {
 		expect(isEnglishLexemeSurface('try', 'trying', 'verb')).toBe(true);
 		expect(isEnglishLexemeSurface('stop', 'stopped', 'verb')).toBe(true);
 		expect(isEnglishLexemeSurface('become closer', 'became closer', 'verb')).toBe(true);
+		expect(isEnglishLexemeSurface('be worried', 'is worried', 'verb')).toBe(true);
+		expect(isEnglishLexemeSurface('be worried', 'were worried', 'verb')).toBe(true);
+		expect(isEnglishLexemeSurface('leave', 'left', 'verb')).toBe(true);
+		expect(isEnglishLexemeSurface('go out', 'went out', 'verb')).toBe(true);
 	});
 
 	it('rejects a synonym or a part-of-speech-changing answer', () => {

@@ -118,7 +118,7 @@ it('defers uncertain or malformed pronunciation choices instead of saving them',
 	}
 });
 
-it('rejects incomplete or duplicate model output rather than saving an unreviewed example', async () => {
+it('defers duplicate model output rather than saving an unreviewed example', async () => {
 	vi.stubGlobal(
 		'fetch',
 		makeFetch([
@@ -126,9 +126,43 @@ it('rejects incomplete or duplicate model output rather than saving an unreviewe
 			{ index: 0, verdict: 'accept', choices: [0], hangul: '애플' }
 		])
 	);
-	await expect(reviewExamplesWithLuna([example, example])).rejects.toThrow(
-		'Invalid example review item'
+	const results = await reviewExamplesWithLuna([example, example]);
+	expect(results.map((result) => result.reason)).toEqual([
+		'example_review_invalid_item',
+		'example_review_invalid_item'
+	]);
+	expect(results.every((result) => !result.accepted)).toBe(true);
+});
+
+it('defers an incomplete response and accounts for its usage once', async () => {
+	vi.stubGlobal(
+		'fetch',
+		makeFetch([{ index: 0, verdict: 'accept', choices: [0], hangul: '애플' }])
 	);
+	const results = await reviewExamplesWithLuna([example, example]);
+	expect(results.map((result) => result.reason)).toEqual([
+		'example_review_invalid_item_count',
+		'example_review_invalid_item_count'
+	]);
+	expect(results[0].attempts[0].usage?.cost).toBe(0.001);
+	expect(results[1].attempts[0].usage).toBeUndefined();
+});
+
+it('defers invalid JSON while retaining dictionary deferrals', async () => {
+	vi.stubEnv('OPENROUTER_API_KEY', 'test');
+	vi.stubGlobal(
+		'fetch',
+		vi.fn().mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					choices: [{ message: { content: 'invalid' } }]
+				})
+			)
+		)
+	);
+	const results = await reviewExamplesWithLuna([{ ...example, targetText: 'zzzqvzz' }, example]);
+	expect(results[0].reason).toBe('cmudict_missing:zzzqvzz');
+	expect(results[1].reason).toBe('example_review_invalid_json');
 });
 
 it('generates the pronunciation during review for non-English examples', async () => {

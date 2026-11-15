@@ -85,7 +85,7 @@ export function monsterLevel(vocabularyLevel: number): number {
 export function wordCombatAmount(level: number, multiplier: number): number {
 	return Math.floor(Math.min(10, Math.max(1, Number.isFinite(level) ? level : 1)) * multiplier);
 }
-// Scale the existing growth curve to 50% of its original health.
+// Scale the existing growth curve to 32% of its original health.
 const MONSTER_HP_EXPONENT = Math.log(29) / Math.log(9);
 
 export function monsterStats(monsterLevel: number, boss = false) {
@@ -95,7 +95,7 @@ export function monsterStats(monsterLevel: number, boss = false) {
 	const x = level / 10 - 1;
 	const growth = x / 2 + (x * x) / 18;
 	const levelProgress = (level - 10) / 90;
-	const maxHp = Math.round((100 + Math.round(2900 * levelProgress ** MONSTER_HP_EXPONENT)) * 0.5);
+	const maxHp = Math.round((100 + Math.round(2900 * levelProgress ** MONSTER_HP_EXPONENT)) * 0.32);
 	return {
 		level,
 		maxHp: maxHp * (boss ? 4 : 1),

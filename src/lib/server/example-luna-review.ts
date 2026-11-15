@@ -103,14 +103,32 @@ export async function reviewExamplesWithLuna(
 		choices?: Array<{ message?: { content?: string } }>;
 		usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
 	};
+	const usage = {
+		input_tokens: data.usage?.prompt_tokens,
+		output_tokens: data.usage?.completion_tokens,
+		cost: data.usage?.cost
+	};
+	const deferInvalidResponse = (reason: string) => {
+		for (const [position, entry] of pending.entries()) {
+			results[entry.index] = {
+				status: 'deferred',
+				accepted: false,
+				reason,
+				attempts: [
+					{ model: data.model || model, probabilities: {}, ...(position === 0 ? { usage } : {}) }
+				]
+			};
+		}
+		return results;
+	};
 	let items: unknown;
 	try {
 		items = JSON.parse(data.choices?.[0]?.message?.content ?? '').items;
 	} catch {
-		throw new Error('Invalid example review JSON.');
+		return deferInvalidResponse('example_review_invalid_json');
 	}
 	if (!Array.isArray(items) || items.length !== pending.length)
-		throw new Error('Invalid example review item count.');
+		return deferInvalidResponse('example_review_invalid_item_count');
 	const indices = new Set<number>();
 	for (const item of items) {
 		const original = pending.find((entry) => entry.index === item?.index);
@@ -119,19 +137,17 @@ export async function reviewExamplesWithLuna(
 			indices.has(item.index) ||
 			!['accept', 'reject', 'uncertain'].includes(item.verdict)
 		)
-			throw new Error('Invalid example review item.');
+			return deferInvalidResponse('example_review_invalid_item');
 		indices.add(item.index);
+	}
+	for (const item of items) {
+		const original = pending.find((entry) => entry.index === item.index)!;
 		const attempt: Attempt = {
 			model: data.model || model,
 			probabilities: {},
 			verdict: item.verdict
 		};
-		if (item.index === pending[0].index)
-			attempt.usage = {
-				input_tokens: data.usage?.prompt_tokens,
-				output_tokens: data.usage?.completion_tokens,
-				cost: data.usage?.cost
-			};
+		if (item.index === pending[0].index) attempt.usage = usage;
 		if (item.verdict !== 'accept') {
 			results[item.index] = {
 				status: item.verdict === 'reject' ? 'rejected' : 'deferred',

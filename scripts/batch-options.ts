@@ -71,6 +71,14 @@ export function readScoringOptions(args: string[]) {
 
 export function readExampleOptions(args: string[]) {
 	const { positional, options } = parseOptions(args, ['limit', 'examples']);
+	if (positional[0] === 'resume') {
+		if (positional.length !== 2 || options.examples != null)
+			throw new Error('Usage: npm run vocas:examples -- resume <checkpoint> [--limit=N]');
+		return {
+			resumePath: positional[1],
+			...(options.limit ? { limit: readLimit(options.limit) } : {})
+		};
+	}
 	if (positional.length > 1 || (positional.length > 0 && options.examples != null))
 		throw new Error('Usage: npm run vocas:examples -- <missing|existing|all> [--limit=N]');
 	const mode = positional[0] ?? options.examples;
@@ -99,6 +107,7 @@ export function examplePipeline(
 				difficultyLevel: { $type: 'number', $gte: 1, $lte: 10 },
 				utilityScore: { $type: 'number', $gte: MIN_RECOMMENDED_UTILITY_SCORE, $lte: 5 },
 				scoreEvaluationDeferred: { $ne: true },
+				quizExcludedByReportId: { $exists: false },
 				...(cursor
 					? {
 							$or: [

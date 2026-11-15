@@ -5,6 +5,7 @@ import mongoose from 'mongoose';
 
 import { examplePipeline, nextBatchSize, readExampleOptions } from './batch-options.ts';
 import { saveGeneratedExamples } from './example-storage.ts';
+import { readCheckpoint, saveCheckpoint, type ExampleCheckpoint } from './example-checkpoint.ts';
 import { createLogFile } from './log-file.ts';
 import { queueDeferredExample } from '../src/lib/server/deferred-example.ts';
 import {
@@ -142,6 +143,7 @@ function buildDeveloperPrompt(): string {
 		`Generate ${EXAMPLES_PER_VOCA} natural bilingual Korean and specified target-language quiz examples for each vocabulary item; return fewer only when another valid example cannot be produced.`,
 		'Each pair must use the supplied lexemes in the supplied senses, express the same situation in both languages, and be idiomatic and grammatically correct.',
 		'Use only grammar-required inflections and do not replace either lexeme.',
+		'Avoid contractions so targetAnswer is an exact contiguous substring of targetSentence.',
 		'Return sourceAnswer and targetAnswer as the exact sentence substrings to hide.',
 		'Use Korean noun items as nouns, never as 하다 predicates; sourceAnswer is the unchanged headword with any particle left outside. For predicates, use the complete conjugated form.',
 		'Keep every index unchanged and return it exactly once.',
@@ -326,10 +328,6 @@ function validateAndFilterResponse(
 		throw new Error('AI response contains duplicate or missing indices.');
 	}
 
-	if (filteredItems.every((item) => item.examples.length === 0)) {
-		throw new Error('Every generated example failed validation.');
-	}
-
 	return {
 		payload: { items: filteredItems },
 		generatedExampleCount,
@@ -364,6 +362,8 @@ function addUsage(target: UsageSummary, usage: unknown): void {
 	target.cost += value?.cost ?? 0;
 }
 
+class GenerationValidationError extends Error {}
+
 async function requestValidatedJson<TResponse, TResult>({
 	client,
 	model,
@@ -383,19 +383,8 @@ async function requestValidatedJson<TResponse, TResult>({
 	label: string;
 	validate: (payload: TResponse) => TResult;
 }): Promise<{ payload: TResult; attempts: number; responseModel: string }> {
-	let previousContent = '';
-	let validationError = '';
-
-	for (let attempt = 1; attempt <= 3; attempt += 1) {
-		const userContent =
-			attempt === 1
-				? JSON.stringify(input)
-				: JSON.stringify({
-						inputs: input,
-						validationError,
-						previousResponse: previousContent,
-						instruction: `Return a complete corrected ${label} response.`
-					});
+	{
+		const userContent = JSON.stringify(input);
 		const response = await client.chat.send({
 			chatRequest: {
 				stream: false,
@@ -414,21 +403,21 @@ async function requestValidatedJson<TResponse, TResult>({
 		}
 
 		addUsage(usage, response.usage);
-		previousContent = readJsonContent(response.choices[0]?.message.content);
+		const content = readJsonContent(response.choices[0]?.message.content);
 
 		try {
 			return {
-				payload: validate(JSON.parse(previousContent) as TResponse),
-				attempts: attempt,
+				payload: validate(JSON.parse(content) as TResponse),
+				attempts: 1,
 				responseModel: response.model
 			};
 		} catch (error) {
-			validationError = error instanceof Error ? error.message : String(error);
-			console.warn(`${label} validation failed (${attempt}/3): ${validationError}`);
+			const message = error instanceof Error ? error.message : String(error);
+			throw new GenerationValidationError(`${label} validation failed: ${message}`, {
+				cause: error
+			});
 		}
 	}
-
-	throw new Error(`${label} failed after 3 attempts: ${validationError}`);
 }
 
 async function generateAndReview({
@@ -551,6 +540,7 @@ type BatchResult = Awaited<ReturnType<typeof generateAndReview>> & {
 	codeValidatedExampleCount: number;
 	reviewRejectedExampleCount: number;
 	codeRejectionCounts: ValidationFailureCounts;
+	validationFailure?: string;
 };
 
 function createUsage(): UsageSummary {
@@ -584,113 +574,128 @@ async function processBatch(
 ): Promise<BatchResult> {
 	const generationUsage = createUsage();
 	const reviewUsage = createUsage();
-	const initialRun = await generateAndReview({
-		client,
-		model,
-		vocas,
-		input,
-		generationUsage,
-		reviewUsage
-	});
-	const payload = initialRun.payload;
-	let generatedExampleCount = initialRun.generatedExampleCount;
-	let codeValidatedExampleCount = initialRun.codeValidatedExampleCount;
-	let reviewRejectedExampleCount = initialRun.reviewRejectedExampleCount;
-	let generationAttempts = initialRun.generationAttempts;
-	let reviewAttempts = initialRun.reviewAttempts;
-	const codeRejectionCounts = initialRun.codeRejectionCounts;
-	const deferredExamples = [...initialRun.deferredExamples];
-	const deferredIndices = new Set(deferredExamples.map((item) => item.itemIndex));
-	const failedIndices = payload.items
-		.filter((item) => item.examples.length === 0 && !deferredIndices.has(item.index))
-		.map((item) => item.index);
-
-	if (failedIndices.length > 0) {
-		try {
-			const retryVocas = failedIndices.map((index) => vocas[index]);
-			const retryInput = failedIndices.map((originalIndex, index) => ({
-				...input[originalIndex],
-				index
-			}));
-			const retryRun = await generateAndReview({
-				client,
-				model,
-				vocas: retryVocas,
-				input: retryInput,
-				generationUsage,
-				reviewUsage,
-				generationPromptSuffix:
-					'This is a retry for items with no surviving examples. Follow the supplied part of speech and answer marking exactly.'
-			});
-			deferredExamples.push(
-				...retryRun.deferredExamples.map((item) => ({
-					...item,
-					itemIndex: failedIndices[item.itemIndex]
-				}))
-			);
-
-			for (const retryItem of retryRun.payload.items) {
-				payload.items[failedIndices[retryItem.index]] = {
-					index: failedIndices[retryItem.index],
-					examples: retryItem.examples
-				};
-			}
-			generatedExampleCount += retryRun.generatedExampleCount;
-			codeValidatedExampleCount += retryRun.codeValidatedExampleCount;
-			reviewRejectedExampleCount += retryRun.reviewRejectedExampleCount;
-			generationAttempts += retryRun.generationAttempts;
-			reviewAttempts += retryRun.reviewAttempts;
-			for (const failure of VALIDATION_FAILURES) {
-				codeRejectionCounts[failure] += retryRun.codeRejectionCounts[failure];
-			}
-		} catch (error) {
-			console.warn(`Failed-item retry skipped: ${error instanceof Error ? error.message : error}`);
-		}
+	let initialRun: Awaited<ReturnType<typeof generateAndReview>>;
+	try {
+		initialRun = await generateAndReview({
+			client,
+			model,
+			vocas,
+			input,
+			generationUsage,
+			reviewUsage
+		});
+	} catch (error) {
+		if (!(error instanceof GenerationValidationError)) throw error;
+		console.warn(`${error.message} · ${vocas.length}개 뜻을 보류합니다.`);
+		return {
+			payload: { items: vocas.map((_, index) => ({ index, examples: [] })) },
+			generatedExampleCount: 0,
+			codeValidatedExampleCount: 0,
+			reviewRejectedExampleCount: 0,
+			codeRejectionCounts: Object.fromEntries(
+				VALIDATION_FAILURES.map((failure) => [failure, 0])
+			) as ValidationFailureCounts,
+			reviewRejectedExamples: [],
+			deferredExamples: [],
+			generationAttempts: 1,
+			reviewAttempts: 0,
+			responseModel: model,
+			generationUsage,
+			reviewUsage,
+			retryVocaCount: 0,
+			validationFailure: error.message
+		};
 	}
-
+	const payload = initialRun.payload;
 	return {
 		...initialRun,
-		deferredExamples,
 		payload,
 		generationUsage,
 		reviewUsage,
-		retryVocaCount: failedIndices.length,
-		generatedExampleCount,
-		codeValidatedExampleCount,
-		reviewRejectedExampleCount,
-		codeRejectionCounts,
-		generationAttempts,
-		reviewAttempts
+		retryVocaCount: 0
 	};
 }
 
 async function main(): Promise<void> {
-	const { mode, limit } = readExampleOptions(process.argv.slice(2));
+	const options = readExampleOptions(process.argv.slice(2));
+	const resumePath = 'resumePath' in options ? options.resumePath : undefined;
+	const previous = resumePath ? await readCheckpoint(resumePath) : undefined;
+	if (previous?.completed) throw new Error('This example-generation run is already complete.');
+	const mode = previous?.mode ?? ('mode' in options ? options.mode : undefined);
+	if (!mode) throw new Error('Example generation mode is required.');
+	const limit = ('limit' in options ? options.limit : undefined) ?? previous?.limit;
+	if (previous && limit != null && limit < previous.attempted)
+		throw new Error(`--limit cannot be less than the ${previous.attempted} 뜻 already processed.`);
 	const batchSize = BATCH_SIZE;
-	const model = resolveGenerationModel(process.env.OPENROUTER_MODEL);
-	const startedAt = new Date();
+	const model = previous?.model ?? resolveGenerationModel(process.env.OPENROUTER_MODEL);
+	const startedAt = previous ? new Date(previous.startedAt) : new Date();
 
 	await mongoose.connect(requireEnvironment('MONGO_URI'));
 	try {
 		const collection = mongoose.connection.collection<VocaInput>('vocas');
 		const client = new OpenRouter({ apiKey: requireEnvironment('OPENROUTER_API_KEY') });
-		const failedVocaIds = new Set<string>();
-		const totalGenerationUsage = createUsage();
-		const totalReviewUsage = createUsage();
-		let batchNumber = 0;
-		let attemptedVocaCount = 0;
-		let savedVocaCount = 0;
-		let savedExampleCount = 0;
-		let retryVocaCount = 0;
-		let codeRejectedExampleCount = 0;
-		let reviewRejectedExampleCount = 0;
-		let cursor: { utilityScore: number; id: mongoose.Types.ObjectId } | undefined;
+		const failedVocaIds = new Set<string>(previous?.failedVocaIds ?? []);
+		const totalGenerationUsage = previous?.generationUsage ?? createUsage();
+		const totalReviewUsage = previous?.reviewUsage ?? createUsage();
+		let batchNumber = previous?.batchNumber ?? 0;
+		let attemptedVocaCount = previous?.attempted ?? 0;
+		let savedVocaCount = previous?.savedVocas ?? 0;
+		let savedExampleCount = previous?.savedExamples ?? 0;
+		let retryVocaCount = previous?.retries ?? 0;
+		let codeRejectedExampleCount = previous?.codeRejected ?? 0;
+		let reviewRejectedExampleCount = previous?.reviewRejected ?? 0;
+		let cursor = previous?.cursor
+			? {
+					utilityScore: previous.cursor.utilityScore,
+					id: new mongoose.Types.ObjectId(previous.cursor.id)
+				}
+			: undefined;
 		const header = JSON.stringify({ startedAt, model, mode, limit, batchSize });
-		const logPath = await createLogFile(
-			'example-generation',
-			`examples-${mode}`,
-			startedAt,
-			`${header}\n`
+		const logPath =
+			previous?.logPath ??
+			(await createLogFile('example-generation', `examples-${mode}`, startedAt, `${header}\n`));
+		const checkpointPath = resumePath ?? `${logPath}.checkpoint.json`;
+		const counted =
+			previous && !('limit' in options)
+				? undefined
+				: await collection
+						.aggregate<{ count: number }>(
+							[...examplePipeline(mode, undefined, cursor), { $count: 'count' }],
+							{
+								allowDiskUse: true
+							}
+						)
+						.toArray();
+		const total = Math.min(
+			counted ? (previous?.attempted ?? 0) + (counted[0]?.count ?? 0) : (previous?.total ?? 0),
+			limit ?? Infinity
+		);
+		const checkpoint = (completed = false): ExampleCheckpoint => ({
+			version: 1,
+			mode,
+			model,
+			startedAt: startedAt.toISOString(),
+			logPath,
+			limit,
+			total,
+			batchNumber,
+			attempted: attemptedVocaCount,
+			savedVocas: savedVocaCount,
+			savedExamples: savedExampleCount,
+			retries: retryVocaCount,
+			codeRejected: codeRejectedExampleCount,
+			reviewRejected: reviewRejectedExampleCount,
+			failedVocaIds: [...failedVocaIds],
+			generationUsage: totalGenerationUsage,
+			reviewUsage: totalReviewUsage,
+			...(cursor
+				? { cursor: { utilityScore: cursor.utilityScore, id: cursor.id.toString() } }
+				: {}),
+			completed
+		});
+		await saveCheckpoint(checkpointPath, checkpoint());
+		console.log(
+			`진행: ${attemptedVocaCount.toLocaleString()} / ${total.toLocaleString()} 뜻 · 이어하기 파일: ${checkpointPath}`
 		);
 
 		while (limit == null || attemptedVocaCount < limit) {
@@ -700,12 +705,21 @@ async function main(): Promise<void> {
 				.toArray();
 			if (vocas.length === 0) break;
 			const lastVoca = vocas.at(-1)!;
-			cursor = { utilityScore: lastVoca.utilityScore, id: lastVoca._id };
 
 			batchNumber += 1;
 			const input = buildInput(vocas);
 			try {
 				const result = await processBatch(client, model, vocas, input);
+				if (result.validationFailure) {
+					await appendFile(
+						`${logPath}.validation-failed.jsonl`,
+						JSON.stringify({
+							vocaIds: vocas.map((voca) => voca._id.toString()),
+							reason: result.validationFailure
+						}) + '\n',
+						'utf8'
+					);
+				}
 				if (result.deferredExamples.length) {
 					for (const item of result.deferredExamples) {
 						const voca = vocas[item.itemIndex];
@@ -747,6 +761,8 @@ async function main(): Promise<void> {
 				reviewRejectedExampleCount += result.reviewRejectedExampleCount;
 				addUsageSummary(totalGenerationUsage, result.generationUsage);
 				addUsageSummary(totalReviewUsage, result.reviewUsage);
+				cursor = { utilityScore: lastVoca.utilityScore, id: lastVoca._id };
+				await saveCheckpoint(checkpointPath, checkpoint());
 
 				const batchStats = {
 					batch: batchNumber,
@@ -754,20 +770,22 @@ async function main(): Promise<void> {
 					savedVocas: written.vocas,
 					failedVocas: vocas.length - successfulItems.length,
 					examples: written.examples,
+					codeRejectionCounts: result.codeRejectionCounts,
 					retriedVocas: result.retryVocaCount,
 					cost: result.generationUsage.cost + result.reviewUsage.cost
 				};
-				console.log(`[batch ${batchNumber}] ${JSON.stringify(batchStats)}`);
+				console.log(
+					`[batch ${batchNumber}] ${JSON.stringify(batchStats)} · 진행 ${attemptedVocaCount.toLocaleString()}/${total.toLocaleString()} (${total ? ((attemptedVocaCount * 100) / total).toFixed(1) : '0.0'}%)`
+				);
 				await appendFile(logPath, `${JSON.stringify(batchStats)}\n`, 'utf8');
 			} catch (error) {
-				for (const voca of vocas) {
-					const vocaId = voca._id.toString();
-					failedVocaIds.add(vocaId);
-				}
-				attemptedVocaCount += vocas.length;
 				const failure = `[batch ${batchNumber}] failed: ${error instanceof Error ? error.stack : error}`;
 				console.error(failure);
 				await appendFile(logPath, `${failure}\n`, 'utf8');
+				throw new Error(
+					`Batch failed. Resume with: npm run vocas:examples -- resume "${checkpointPath}"`,
+					{ cause: error }
+				);
 			}
 		}
 
@@ -792,6 +810,7 @@ async function main(): Promise<void> {
 		};
 		console.log(`[final] ${JSON.stringify(finalStats, null, 2)}`);
 		await appendFile(logPath, `[final] ${JSON.stringify(finalStats, null, 2)}\n`, 'utf8');
+		await saveCheckpoint(checkpointPath, checkpoint(true));
 	} finally {
 		await mongoose.disconnect();
 	}

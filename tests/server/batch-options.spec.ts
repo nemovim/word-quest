@@ -60,6 +60,18 @@ describe('batch options', () => {
 		expect(() => readExampleOptions(['--examples', 'invalid'])).toThrow();
 	});
 
+	it('accepts a checkpoint as a positional resume argument', () => {
+		expect(readExampleOptions(['resume', 'logs/example-generation/run.checkpoint.json'])).toEqual({
+			resumePath: 'logs/example-generation/run.checkpoint.json'
+		});
+		expect(() => readExampleOptions(['resume'])).toThrow();
+		expect(readExampleOptions(['resume', 'checkpoint.json', '--limit=5000'])).toEqual({
+			resumePath: 'checkpoint.json',
+			limit: 5000
+		});
+		expect(() => readExampleOptions(['resume', 'checkpoint.json', '--limit=0'])).toThrow();
+	});
+
 	it('sorts by utility before pagination and filters on example existence', () => {
 		const id = new mongoose.Types.ObjectId();
 		const pipeline = examplePipeline('existing', 4, { utilityScore: 4.6, id });
@@ -82,7 +94,11 @@ describe('batch options', () => {
 
 	it('excludes invalid vocabulary from example generation', () => {
 		expect(examplePipeline('all')[0]).toMatchObject({
-			$match: { utilityScore: { $gte: 2 }, scoreEvaluationDeferred: { $ne: true } }
+			$match: {
+				utilityScore: { $gte: 2 },
+				scoreEvaluationDeferred: { $ne: true },
+				quizExcludedByReportId: { $exists: false }
+			}
 		});
 	});
 

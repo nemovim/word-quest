@@ -84,7 +84,7 @@ const schema = new mongoose.Schema({
 	lockUntil: { type: Number, default: 0 }
 });
 export const GameModel = mongoose.models.Game ?? mongoose.model('Game', schema);
-const COMBAT_VERSION = 12;
+const COMBAT_VERSION = 14;
 export const DEFAULT_ARMOR: ArmorStats = {
 	maxHp: 100,
 	maxHpUpgrades: 0,
